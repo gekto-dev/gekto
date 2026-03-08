@@ -162,11 +162,12 @@ function spawnOpus(): void {
     }
   })
 
-  opusProcess.stderr.on('data', () => {
-    // Ignore stderr
+  opusProcess.stderr.on('data', (data) => {
+    console.error(`[GektoPersistent] stderr:`, data.toString().trim())
   })
 
-  opusProcess.on('close', () => {
+  opusProcess.on('close', (code) => {
+    console.error(`[GektoPersistent] Process exited with code ${code}`)
     opusProcess = null
     opusReady = false
     opusLoading = true
@@ -245,27 +246,34 @@ function handleOpusEvent(event: Record<string, unknown>): void {
     }
   }
 
-  // Final result
-  if (event.type === 'result' && event.result) {
+  // Final result — resolve on ANY result event, even if result is empty
+  if (event.type === 'result') {
     if (opusPendingResolve) {
-      opusPendingResolve(event.result as string)
+      opusPendingResolve((event.result as string) || '')
       opusPendingResolve = null
     }
   }
 }
 
-async function sendToOpus(prompt: string, callbacks: GektoCallbacks): Promise<string> {
-  if (!opusProcess || !opusReady) {
+async function sendToOpus(prompt: string, callbacks: GektoCallbacks, retries = 3): Promise<string> {
+  // Ensure process is running, respawn if needed
+  if (!opusProcess) {
     spawnOpus()
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
 
   if (!opusProcess) {
-    return 'Gekto is starting up, please try again.'
+    if (retries > 0) {
+      console.error(`[GektoPersistent] Process not available, retrying... (${retries} left)`)
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      return sendToOpus(prompt, callbacks, retries - 1)
+    }
+    throw new Error('Gekto process failed to start after retries')
   }
 
   opusCallbacks = callbacks
   opusCurrentTool = null
+  opusReceivedDeltas = false
 
   return new Promise((resolve) => {
     opusPendingResolve = (result: string) => {
@@ -280,8 +288,16 @@ async function sendToOpus(prompt: string, callbacks: GektoCallbacks): Promise<st
     if (opusProcess && !opusProcess.killed && opusProcess.stdin.writable) {
       opusProcess.stdin.write(JSON.stringify(inputMessage) + '\n')
     } else {
-      opusPendingResolve?.('Process is not available, please try again.')
+      // Process died between check and write — retry
       opusPendingResolve = null
+      opusCallbacks = null
+      if (retries > 0) {
+        console.error(`[GektoPersistent] Process died before write, retrying... (${retries} left)`)
+        resolve(sendToOpus(prompt, callbacks, retries - 1))
+      } else {
+        resolve('')
+      }
+      return
     }
 
     // Timeout after 5 min for complex tasks
