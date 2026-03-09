@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback, type DragEvent } from 'react'
-import { FileTextIcon, TrashIcon, ImageIcon, CounterClockwiseClockIcon, Cross2Icon, PlusIcon } from '@radix-ui/react-icons'
+import { FileTextIcon, TrashIcon, ImageIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAgent, useAgentMessageListener, type Message } from '../context/AgentContext'
 import { useGekto } from '../context/GektoContext'
 import { useStore } from '../store/store'
-import { useServerState, getServerState, type GektoSession } from '../hooks/useServerState'
+import { useServerState, getServerState } from '../hooks/useServerState'
 
 const MASTER_ID = 'master'
 const CHAT_SIZE_KEY = 'gekto-chat-size'
@@ -90,14 +90,12 @@ export function ChatWindow({
   const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set())
   const [stagedImages, setStagedImages] = useState<string[]>([])
   const [isDraggingOver, setIsDraggingOver] = useState(false)
-  const [showSessionHistory, setShowSessionHistory] = useState(false)
   const [isRestoredSession, setIsRestoredSession] = useState(false)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const historyDropdownRef = useRef<HTMLDivElement>(null)
   const resizeStart = useRef({ x: 0, y: 0, width: 0, height: 0 })
 
   const {
@@ -113,27 +111,13 @@ export function ChatWindow({
   } = useAgent()
 
   const { createPlan, currentPlan, openPlanPanel, cancelPlan, markTaskInProgress } = useGekto()
-  const { state: serverState, send: sendToServer } = useServerState()
-  const gektoSessions = serverState.gektoSessions || []
-
+  const { state: serverState, send: sendToServer, isReady: serverReady } = useServerState()
   // Get agent/task names from global store
   const agents = useStore((s) => s.agents)
   const tasks = useStore((s) => s.tasks)
   const agent = agents[lizardId]
   const task = agent?.taskId ? tasks[agent.taskId] : undefined
   const agentName = task?.name
-
-  // Close history dropdown on click outside
-  useEffect(() => {
-    if (!showSessionHistory) return
-    const handler = (e: MouseEvent) => {
-      if (historyDropdownRef.current && !historyDropdownRef.current.contains(e.target as Node)) {
-        setShowSessionHistory(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showSessionHistory])
 
   const isMaster = lizardId === MASTER_ID
   const hasActivePlan = isMaster && currentPlan && currentPlan.status !== 'completed' && currentPlan.status !== 'failed' && currentPlan.status !== 'planning'
@@ -250,21 +234,16 @@ export function ChatWindow({
   // Register as message listener
   useAgentMessageListener(lizardId, handleAgentMessage)
 
-  // Load chat history on mount - from server state chats
+  // Load chat history from server state — waits for snapshot before deciding
+  // For master, resolve to the actual master session ID (e.g. master_1772966060233)
+  const resolvedMasterId = isMaster ? serverState.currentMasterId : lizardId
+  const agentMessages = serverState.agents[resolvedMasterId || lizardId]?.messages
   useEffect(() => {
-    if (historyLoaded) return
+    if (historyLoaded || !serverReady) return
 
-    const greeting = lizardId === MASTER_ID
-      ? `**Hey, I'm Gekto** — your project manager.\n\nI research the codebase, break your request into parallel tasks, and spawn agents to execute them.`
-      : 'Hi! How can I help you today?'
-
-    // Chat history is now stored in server state under chats[chatKey]
-    const chatKey = agent?.taskId || lizardId
-    const state = getServerState()
-    const saved = state.chats[chatKey]
-
-    if (saved && saved.length > 0) {
-      setMessages(saved.map(m => ({
+    if (agentMessages && agentMessages.length > 0) {
+      // Server has history — load it
+      setMessages(agentMessages.map(m => ({
         ...m,
         timestamp: typeof m.timestamp === 'string' ? new Date(m.timestamp) : m.timestamp,
         toolUse: m.toolUse ? {
@@ -275,20 +254,19 @@ export function ChatWindow({
             : undefined,
         } : undefined,
       })) as Message[])
-      setHistoryLoaded(true)
     } else {
-      setMessages([{
-        id: '1',
-        text: greeting,
-        sender: 'bot',
-        timestamp: new Date(),
-      }])
-      setHistoryLoaded(true)
+      // Server has no history — show greeting
+      const greeting = lizardId === MASTER_ID
+        ? `**Hey, I'm Gekto** — your project manager.\n\nI research the codebase, break your request into parallel tasks, and spawn agents to execute them.`
+        : 'Hi! How can I help you today?'
+      setMessages([{ id: '1', text: greeting, sender: 'bot', timestamp: new Date() }])
     }
-  }, [lizardId, agent, historyLoaded])
+    setHistoryLoaded(true)
+  }, [agentMessages, serverReady, historyLoaded, lizardId, resolvedMasterId])
 
   // Save chat history when messages change (for master/agents without tasks)
   // Chat messages for agents with tasks are saved via AgentContext
+  // historyLoaded is only set after snapshot arrives, so greeting can't overwrite real history
   useEffect(() => {
     if (!historyLoaded || messages.length === 0) return
     // Skip if agent has a task (saved by AgentContext)
@@ -629,49 +607,6 @@ export function ChatWindow({
     }
   }
 
-  const handleRestoreSession = (sessionId: string) => {
-    // Find session locally and set messages directly (avoids race with server diff)
-    const session = gektoSessions.find(s => s.id === sessionId)
-    if (session) {
-      setMessages(session.messages.map(m => ({
-        ...m,
-        timestamp: typeof m.timestamp === 'string' ? new Date(m.timestamp) : m.timestamp,
-        toolUse: m.toolUse ? {
-          ...m.toolUse,
-          startTime: typeof m.toolUse.startTime === 'string' ? new Date(m.toolUse.startTime) : m.toolUse.startTime,
-          endTime: m.toolUse.endTime
-            ? (typeof m.toolUse.endTime === 'string' ? new Date(m.toolUse.endTime) : m.toolUse.endTime)
-            : undefined,
-        } : undefined,
-      })) as Message[])
-    }
-    // Tell server to restore plan + switch Claude session ID
-    sendToServer({ type: 'restore_gekto_session', sessionId })
-    setIsRestoredSession(true)
-    setShowSessionHistory(false)
-  }
-
-  const handleDeleteSession = (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation()
-    sendToServer({ type: 'delete_gekto_session', sessionId })
-  }
-
-  const formatTimeAgo = (isoDate: string): string => {
-    const now = Date.now()
-    const then = new Date(isoDate).getTime()
-    const diffMs = now - then
-    const diffMin = Math.floor(diffMs / 60000)
-    if (diffMin < 1) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    const diffHr = Math.floor(diffMin / 60)
-    if (diffHr < 24) return `${diffHr}h ago`
-    const diffDay = Math.floor(diffHr / 24)
-    if (diffDay < 30) return `${diffDay}d ago`
-    return new Date(isoDate).toLocaleDateString()
-  }
-
-
-
   const toggleToolExpanded = (messageId: string) => {
     setExpandedTools(prev => {
       const next = new Set(prev)
@@ -836,69 +771,6 @@ export function ChatWindow({
           </div>
         </div>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-          {isMaster && (
-            <div className="relative" ref={historyDropdownRef}>
-              <button
-                onClick={() => setShowSessionHistory(prev => !prev)}
-                className="text-white/40 hover:text-white/70 transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded"
-                title="Session history"
-              >
-                <CounterClockwiseClockIcon width={14} height={14} />
-              </button>
-              {showSessionHistory && (
-                <div
-                  className="absolute right-0 top-8 z-50 overflow-hidden"
-                  style={{
-                    width: 280,
-                    maxHeight: 320,
-                    background: 'rgb(35, 35, 45)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: 8,
-                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
-                  }}
-                >
-                  <div className="px-3 py-2 text-xs text-white/50 font-medium" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                    Session History
-                  </div>
-                  <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-                    <div
-                      className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors"
-                      onClick={() => { setShowSessionHistory(false); handleClearChat() }}
-                      style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}
-                    >
-                      <PlusIcon width={12} height={12} className="text-white/50" />
-                      <span className="text-xs text-white/70">New chat</span>
-                    </div>
-                    {gektoSessions.length === 0 ? (
-                      <div className="px-3 py-4 text-xs text-white/30 text-center">
-                        No past sessions
-                      </div>
-                    ) : (
-                      gektoSessions.map((session: GektoSession) => (
-                        <div
-                          key={session.id}
-                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors group"
-                          onClick={() => handleRestoreSession(session.id)}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs text-white/70 truncate">{session.title}</div>
-                            <div className="text-[10px] text-white/30">{formatTimeAgo(session.createdAt)}</div>
-                          </div>
-                          <button
-                            onClick={(e) => handleDeleteSession(e, session.id)}
-                            className="flex-shrink-0 text-white/20 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center"
-                            title="Delete session"
-                          >
-                            <Cross2Icon width={10} height={10} />
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           <button
             onClick={handleClearChat}
             className="text-white/40 hover:text-white/70 transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded"

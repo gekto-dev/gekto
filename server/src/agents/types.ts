@@ -41,26 +41,39 @@ export interface FileChange {
   filePath: string
   before: string | null  // null if file didn't exist
   after: string
+  agentId?: string
+  taskId?: string
+  timestamp?: string
 }
 
 // === Gekto Types ===
 
+export type TaskStatus = 'pending' | 'in_progress' | 'pending_testing' | 'completed' | 'failed'
+
 export interface Task {
   id: string
+  name: string
   description: string
   prompt: string
   files: string[]
-  status: 'pending' | 'in_progress' | 'pending_testing' | 'completed' | 'failed'
+  status: TaskStatus
   dependencies: string[]
+  planId?: string
+  assignedAgentId?: string
+  result?: string
+  error?: string
+  sessionId?: string
 }
+
+export type ExecutionPlanStatus = 'planning' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
 
 export interface ExecutionPlan {
   id: string
-  status: 'planning' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
+  status: ExecutionPlanStatus
   originalPrompt: string
   reasoning?: string
   buildPrompt?: string
-  tasks: Task[]
+  taskIds: string[]
   createdAt: string
 }
 
@@ -68,5 +81,6 @@ export interface GektoToolResult {
   type: 'chat' | 'build' | 'remove'
   message?: string
   plan?: ExecutionPlan
+  tasks?: Task[]
   removedAgents?: string[]
 }

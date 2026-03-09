@@ -296,17 +296,20 @@ export function useAgentShapeSync(
     }
 
     // 4. Clean up orphaned shapes (have agentId but agent doesn't exist in store)
+    // Skip if no agents loaded yet (snapshot hasn't arrived — don't wipe shapes)
     // Skip shapes whose agentId is in the undo buffer (might be restored via Cmd+Z)
-    const allTaskShapes = editor.getCurrentPageShapes().filter(
-      s => (s.type as string) === 'task'
-    )
-    for (const shape of allTaskShapes) {
-      const taskShape = shape as unknown as TaskShape
-      const agentId = taskShape.props?.agentId
-      if (agentId && !currentAgentIds.has(agentId) && !deletedAgentsRef.current.has(agentId)) {
-        deletingShapesRef.current.add(shape.id)
-        editor.deleteShape(shape.id)
-        deletingShapesRef.current.delete(shape.id)
+    if (currentAgentIds.size > 0) {
+      const allTaskShapes = editor.getCurrentPageShapes().filter(
+        s => (s.type as string) === 'task'
+      )
+      for (const shape of allTaskShapes) {
+        const taskShape = shape as unknown as TaskShape
+        const agentId = taskShape.props?.agentId
+        if (agentId && !currentAgentIds.has(agentId) && !deletedAgentsRef.current.has(agentId)) {
+          deletingShapesRef.current.add(shape.id)
+          editor.deleteShape(shape.id)
+          deletingShapesRef.current.delete(shape.id)
+        }
       }
     }
   }, [editor, agentsWithTasks])

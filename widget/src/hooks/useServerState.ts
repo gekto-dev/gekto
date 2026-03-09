@@ -1,7 +1,7 @@
 // useServerState — single hook that mirrors server-authoritative state
 //
 // On connect: receives full state_snapshot
-// On mutation: receives state_diff patches
+// On mutation: receives typed action messages (plan_set, task_set, agent_set, etc.)
 // Components read from `state`, send actions via `send()`
 
 import { useState, useEffect, useCallback, useSyncExternalStore } from 'react'
@@ -68,6 +68,9 @@ export interface FileChange {
   filePath: string
   before: string | null
   after: string
+  agentId?: string
+  taskId?: string
+  timestamp?: string
 }
 
 export interface Agent {
@@ -76,6 +79,12 @@ export interface Agent {
   personaId: string
   status: AgentStatus
   fileChanges?: FileChange[]
+  fileChangePaths?: string[]
+  messages?: Message[]
+  sessionId?: string
+  planId?: string
+  createdAt?: string
+  completedAt?: string
 }
 
 export type PlanStatus = 'executing' | 'completed' | 'failed' | 'canceled'
@@ -97,36 +106,15 @@ export interface LizardVisual {
 
 export type ExecutionPlanStatus = 'planning' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
 
-export interface ExecutionPlanTask {
-  id: string
-  description: string
-  prompt: string
-  files: string[]
-  assignedAgentId?: string
-  status: TaskStatus
-  dependencies: string[]
-  result?: string
-  error?: string
-}
-
 export interface ExecutionPlan {
   id: string
   status: ExecutionPlanStatus
   originalPrompt: string
   reasoning?: string
   buildPrompt?: string
-  tasks: ExecutionPlanTask[]
+  taskIds: string[]
   createdAt: string
   completedAt?: string
-}
-
-export interface GektoSession {
-  id: string
-  title: string
-  messages: Message[]
-  plan?: ExecutionPlan
-  gektoSessionId: string
-  createdAt: string
 }
 
 export interface GektoAppState {
@@ -137,7 +125,8 @@ export interface GektoAppState {
   chats: Record<string, Message[]>
   personas: Persona[]
   plans: Record<string, Plan>
-  gektoSessions: GektoSession[]
+  fileChanges: Record<string, FileChange>
+  currentMasterId: string
 }
 
 // ============ State Store (external store for useSyncExternalStore) ============
@@ -152,7 +141,8 @@ let currentState: GektoAppState = {
   chats: {},
   personas: [],
   plans: {},
-  gektoSessions: [],
+  fileChanges: {},
+  currentMasterId: '',
 }
 
 const listeners = new Set<Listener>()
@@ -177,36 +167,8 @@ function setState(newState: GektoAppState): void {
   emitChange()
 }
 
-function applyDiffs(diffs: Array<{ path: string; value: unknown }>): void {
-  // Create a shallow clone at the top level to trigger React re-render
-  const next = { ...currentState } as Record<string, unknown>
-
-  for (const { path, value } of diffs) {
-    const keys = path.split('.')
-
-    // Clone each level along the path for immutability
-    let current = next
-    for (let i = 0; i < keys.length - 1; i++) {
-      const key = keys[i]
-      if (current[key] === undefined || current[key] === null || typeof current[key] !== 'object') {
-        current[key] = {}
-      } else if (Array.isArray(current[key])) {
-        current[key] = [...(current[key] as unknown[])]
-      } else {
-        current[key] = { ...(current[key] as Record<string, unknown>) }
-      }
-      current = current[key] as Record<string, unknown>
-    }
-
-    const lastKey = keys[keys.length - 1]
-    if (value === undefined || value === null) {
-      delete current[lastKey]
-    } else {
-      current[lastKey] = value
-    }
-  }
-
-  currentState = next as unknown as GektoAppState
+function updateState(updater: (s: GektoAppState) => GektoAppState): void {
+  currentState = updater(currentState)
   emitChange()
 }
 
@@ -214,6 +176,7 @@ function applyDiffs(diffs: Array<{ path: string; value: unknown }>): void {
 
 let wsInstance: WebSocket | null = null
 let wsConnected = false
+let snapshotReceived = false
 const connectionListeners = new Set<Listener>()
 
 function initWebSocket(): void {
@@ -236,20 +199,66 @@ function initWebSocket(): void {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
-
       switch (msg.type) {
         case 'state_snapshot':
+          snapshotReceived = true
           setState(msg.state)
           break
 
-        case 'state_diff':
-          if (msg.diffs && Array.isArray(msg.diffs)) {
-            applyDiffs(msg.diffs)
-          }
+        case 'plan_set':
+          updateState(s => ({ ...s, plan: msg.plan }))
+          break
+
+        case 'task_set':
+          updateState(s => ({ ...s, tasks: { ...s.tasks, [msg.taskId]: msg.task } }))
+          break
+
+        case 'task_delete':
+          updateState(s => {
+            const t = { ...s.tasks }
+            delete t[msg.taskId]
+            return { ...s, tasks: t }
+          })
+          break
+
+        case 'agent_set':
+          updateState(s => ({ ...s, agents: { ...s.agents, [msg.agentId]: msg.agent } }))
+          break
+
+        case 'agent_delete':
+          updateState(s => {
+            const a = { ...s.agents }
+            delete a[msg.agentId]
+            return { ...s, agents: a }
+          })
+          break
+
+        case 'current_master_changed':
+          updateState(s => ({ ...s, currentMasterId: msg.currentMasterId }))
+          break
+
+        case 'visuals_set':
+          updateState(s => ({ ...s, visuals: msg.visuals }))
+          break
+
+        case 'visual_delete':
+          updateState(s => {
+            const v = { ...s.visuals }
+            delete v[msg.agentId]
+            return { ...s, visuals: v }
+          })
+          break
+
+        case 'file_change_set':
+          updateState(s => ({ ...s, fileChanges: { ...s.fileChanges, [msg.path]: msg.change } }))
+          break
+
+        case 'chat_set':
+          updateState(s => ({ ...s, chats: { ...s.chats, [msg.agentId]: msg.messages } }))
           break
 
         default:
-          // Forward to raw message handler
+          // Forward streaming/transient messages to rawMessageHandler
           if (rawMessageHandler) {
             rawMessageHandler(msg)
           }
@@ -278,6 +287,7 @@ export interface UseServerStateReturn {
   state: GektoAppState
   send: (action: Record<string, unknown>) => void
   isConnected: boolean
+  isReady: boolean
   ws: WebSocket | null
 }
 
@@ -309,6 +319,7 @@ export function useServerState(): UseServerStateReturn {
     state,
     send,
     isConnected,
+    isReady: snapshotReceived,
     ws: wsInstance,
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChatBubbleIcon, PlusCircledIcon, Cross2Icon, DashboardIcon } from '@radix-ui/react-icons'
+import { ChatBubbleIcon, PlusCircledIcon, Cross2Icon, DashboardIcon, ListBulletIcon } from '@radix-ui/react-icons'
 import { LizardAvatar } from './LizardAvatar'
 import { ChatWindow, getChatSize } from './ChatWindow'
 import { GektoPlanPanel } from './GektoPlanPanel'
@@ -39,18 +39,14 @@ export function MasterLizard() {
   const [isHovered, setIsHovered] = useState(false)
   const [chatSize, setChatSize] = useState(getChatSize)
 
-  // Sync plan panel with chat: open when chat opens (if a real plan exists), close when chat closes
-  const prevChatOpen = useRef(false)
-  const hasMeaningfulPlan = currentPlan && currentPlan.status !== 'planning'
+  // Sync plan panel with chat: open when chat is open and plan exists, close when chat closes
   useEffect(() => {
-    if (isChatOpen && !prevChatOpen.current && hasMeaningfulPlan) {
+    if (isChatOpen && currentPlan) {
       openPlanPanel()
-    }
-    if (!isChatOpen && prevChatOpen.current) {
+    } else if (!isChatOpen) {
       closePlanPanel()
     }
-    prevChatOpen.current = isChatOpen
-  }, [isChatOpen, hasMeaningfulPlan, openPlanPanel, closePlanPanel])
+  }, [isChatOpen, currentPlan, openPlanPanel, closePlanPanel])
 
   const menuItems = [
     {
@@ -61,6 +57,20 @@ export function MasterLizard() {
       active: isChatOpen,
       onClick: () => isChatOpen ? closeChat() : openChat(MASTER_ID, 'task'),
     },
+    ...(currentPlan ? [{
+      id: 'plan',
+      icon: <ListBulletIcon width={20} height={20} />,
+      label: isPlanPanelOpen ? 'Close Plan' : 'Plan',
+      active: isPlanPanelOpen,
+      onClick: () => {
+        if (isPlanPanelOpen) {
+          closePlanPanel()
+        } else {
+          openPlanPanel()
+          if (!isChatOpen) openChat(MASTER_ID, 'task')
+        }
+      },
+    }] : []),
     {
       id: 'spawn',
       icon: <PlusCircledIcon width={20} height={20} />,

@@ -6,3 +6,5 @@ export interface Todo {
 }
 
 export type FilterType = 'all' | 'active' | 'completed'
+
+export type SortType = 'newest' | 'oldest'

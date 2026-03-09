@@ -5,11 +5,7 @@ import { setRawMessageHandler, getServerState } from '../hooks/useServerState'
 // Helper to save message — sends to server state via WS
 function saveMessage(agentId: string, message: Message) {
   const state = getServerState()
-  const agent = state.agents[agentId]
-
-  // Save to server state (chats keyed by taskId if agent has task, otherwise by agentId)
-  const chatKey = agent?.taskId || agentId
-  const existing = state.chats[chatKey] || []
+  const existing = state.agents[agentId]?.messages || []
   const serialized = {
     ...message,
     timestamp: typeof message.timestamp === 'string' ? message.timestamp : new Date().toISOString(),
@@ -19,7 +15,7 @@ function saveMessage(agentId: string, message: Message) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'save_chat',
-      agentId: chatKey,
+      agentId,
       messages: [...existing, serialized],
     }))
   }
@@ -343,51 +339,12 @@ export function AgentProvider({ children }: AgentProviderProps) {
           break
 
         case 'file_change':
-          // File changes are now tracked by server state via agentPool.ts
-          // But also notify the store for backward compat
-          if (lizardId && msg.change) {
-            const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              const state = getServerState()
-              const agent = state.agents[lizardId]
-              if (agent) {
-                const change = msg.change as FileChange
-                const existing = agent.fileChanges ?? []
-                const idx = existing.findIndex(fc => fc.filePath === change.filePath)
-                let updated: FileChange[]
-                if (idx >= 0) {
-                  updated = [...existing]
-                  updated[idx] = { ...updated[idx], after: change.after, tool: change.tool }
-                } else {
-                  updated = [...existing, change]
-                }
-                ws.send(JSON.stringify({
-                  type: 'save_state',
-                  path: `agents.${lizardId}.fileChanges`,
-                  value: updated,
-                }))
-              }
-            }
-          }
+          // File changes are tracked by server state via agentPool.ts
+          // and broadcast via agent_set action — no client-side mutation needed
           break
 
         case 'files_reverted':
-          if (lizardId && msg.reverted) {
-            const state = getServerState()
-            const agent = state.agents[lizardId]
-            if (agent?.fileChanges) {
-              const revertedSet = new Set(msg.reverted as string[])
-              const remaining = agent.fileChanges.filter(fc => !revertedSet.has(fc.filePath))
-              const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'save_state',
-                  path: `agents.${lizardId}.fileChanges`,
-                  value: remaining,
-                }))
-              }
-            }
-          }
+          // Server handles revert state updates and broadcasts via agent_set
           break
 
         case 'permission':
@@ -458,21 +415,15 @@ export function AgentProvider({ children }: AgentProviderProps) {
         case 'debug_pool_result':
           break
 
-        // Plan-related messages - forward to GektoContext
+        // Plan/Gekto messages - forward to GektoContext
         case 'plan_created':
-        case 'plan_updated':
-        case 'plan_failed':
         case 'gekto_chat':
-        case 'gekto_classified':
         case 'gekto_text':
         case 'gekto_thinking':
+        case 'gekto_done':
         case 'gekto_remove':
-        case 'prompt_generated':
-        case 'prompts_ready':
-        case 'task_started':
-        case 'task_completed':
-        case 'task_failed':
-        case 'planning_started': {
+        case 'planning_started':
+        case 'session_restored': {
           const gektoHandler = (window as unknown as { __gektoMessageHandler?: (msg: unknown) => void }).__gektoMessageHandler
           if (gektoHandler) {
             gektoHandler(msg)

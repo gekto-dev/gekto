@@ -124,12 +124,15 @@ If modifying, use update_plan with ALL tasks (existing + changes).]`
 
   switch (parsed.action) {
     case 'create_plan':
-    case 'update_plan':
+    case 'update_plan': {
+      const result = createPlanFromTasks(parsed.tasks || [], planId, prompt, parsed.reasoning, parsed.buildPrompt)
       return {
         type: 'build',
-        plan: createPlanFromTasks(parsed.tasks || [], planId, prompt, parsed.reasoning, parsed.buildPrompt),
+        plan: result.plan,
+        tasks: result.tasks,
         message: parsed.message || parsed.reasoning,
       }
+    }
 
     case 'reply':
     case 'clarify':
@@ -151,13 +154,18 @@ If modifying, use update_plan with ALL tasks (existing + changes).]`
 
 // === Helper Functions ===
 
+interface CreatePlanResult {
+  plan: ExecutionPlan
+  tasks: Task[]
+}
+
 function createPlanFromTasks(
   tasks: Partial<Task>[],
   planId: string,
   originalPrompt: string,
   reasoning?: string,
   buildPrompt?: string
-): ExecutionPlan {
+): CreatePlanResult {
   // Extract taskId from planId (planId format: "plan_test_123456")
   // taskId should be "test_123456" for task IDs like "test_123456_1"
   const taskId = planId.replace(/^plan_/, '')
@@ -165,33 +173,40 @@ function createPlanFromTasks(
   // Use same format as hardcoded Test button: test_X_1, test_X_2, etc.
   const parsedTasks: Task[] = tasks.map((t, i) => ({
     id: `${taskId}_${i + 1}`,
+    name: (t.description || 'Task').slice(0, 50),
     description: t.description || 'Task',
     prompt: '',  // Prompts are generated in a separate parallel step
     files: (t.files || []).filter(f => f && String(f).trim()),
     status: 'pending' as const,
     dependencies: t.dependencies || [],
+    planId,
   }))
 
   // Fallback to single task if empty
   if (parsedTasks.length === 0) {
     parsedTasks.push({
       id: `${taskId}_1`,
+      name: 'Execute task',
       description: 'Execute task',
       prompt: originalPrompt,
       files: [],
       status: 'pending',
       dependencies: [],
+      planId,
     })
   }
 
   return {
-    id: planId,
-    status: 'ready',
-    originalPrompt,
-    reasoning,
-    buildPrompt,
+    plan: {
+      id: planId,
+      status: 'ready',
+      originalPrompt,
+      reasoning,
+      buildPrompt,
+      taskIds: parsedTasks.map(t => t.id),
+      createdAt: new Date().toISOString(),
+    },
     tasks: parsedTasks,
-    createdAt: new Date().toISOString(),
   }
 }
 
@@ -233,11 +248,10 @@ export interface PromptGenCallbacks {
 
 export async function generateTaskPrompts(
   plan: ExecutionPlan,
+  tasks: Task[],
   workingDir: string,
   callbacks?: PromptGenCallbacks,
-): Promise<ExecutionPlan> {
-  const tasks = plan.tasks
-
+): Promise<Map<string, string>> {
   // Build shared context about the plan
   const planContext = [
     `Project goal: ${plan.originalPrompt}`,
@@ -274,19 +288,8 @@ export async function generateTaskPrompts(
 
   const results = await Promise.all(promptPromises)
 
-  // Build updated plan with prompts filled in
-  const promptMap = new Map(results.map(r => [r.taskId, r.prompt]))
-  const updatedPlan: ExecutionPlan = {
-    ...plan,
-    status: 'prompts_ready',
-    tasks: plan.tasks.map(t => ({
-      ...t,
-      prompt: promptMap.get(t.id) || t.prompt,
-    })),
-  }
-
   callbacks?.onAllPromptsReady?.()
-  return updatedPlan
+  return new Map(results.map(r => [r.taskId, r.prompt]))
 }
 
 // === Claude Helper ===

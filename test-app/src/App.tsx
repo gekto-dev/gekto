@@ -1,4 +1,10 @@
+import { useTodos } from './hooks/useTodos'
+import { TodoInput } from './components/TodoInput'
+import { TodoList } from './components/TodoList'
+
 function App() {
+  const { todos, addTodo, toggleTodo, deleteTodo, filter, setFilter, sort, setSort } = useTodos()
+
   return (
     <div
       style={{
@@ -60,6 +66,28 @@ function App() {
       >
         Playground
       </p>
+
+      {/* Todo section */}
+      <div
+        style={{
+          position: 'relative',
+          maxWidth: 500,
+          width: '100%',
+          margin: '48px auto 0',
+          padding: '0 20px',
+        }}
+      >
+        <TodoInput onAdd={addTodo} />
+        <TodoList
+          todos={todos}
+          onToggle={toggleTodo}
+          onDelete={deleteTodo}
+          filter={filter}
+          setFilter={setFilter}
+          sort={sort}
+          setSort={setSort}
+        />
+      </div>
     </div>
   )
 }

@@ -14,7 +14,7 @@ interface ServerStateProviderProps {
 
 export function ServerStateProvider({ children }: ServerStateProviderProps) {
   // This call establishes the WebSocket connection and starts
-  // receiving state_snapshot / state_diff messages.
+  // receiving state_snapshot and typed action messages.
   useServerState()
 
   return <>{children}</>

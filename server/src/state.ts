@@ -1,12 +1,22 @@
 // Server-authoritative state — THE single source of truth
 //
 // All durable state lives here. Widget receives a full snapshot on connect
-// and incremental diffs on every mutation. Persisted to gekto-store.json.
+// and incremental diffs on every mutation. Persisted to .gekto/ directory
+// (per-entity files).
 
-import fs from 'fs'
-import path from 'path'
 import type { WebSocket } from 'ws'
-import type { FileChange, ExecutionPlan } from './agents/types.js'
+import type { FileChange, ExecutionPlan, Task, TaskStatus } from './agents/types.js'
+import {
+  initEntityStore,
+  entityStoreExists,
+  loadFromEntityStore,
+  persistMutation,
+  persistFullState,
+  rebuildOverview,
+} from './entityStore.js'
+
+// Re-export for backward compatibility
+export type { Task, TaskStatus } from './agents/types.js'
 
 // ============ State Shape ============
 
@@ -37,22 +47,7 @@ export interface Persona {
   avatar?: string
 }
 
-export type TaskStatus = 'pending' | 'in_progress' | 'pending_testing' | 'completed' | 'failed'
-
-export interface Task {
-  id: string
-  name: string
-  description: string
-  prompt: string
-  status: TaskStatus
-  planId?: string
-  files?: string[]
-  assignedAgentId?: string
-  dependencies?: string[]
-  result?: string
-  error?: string
-  sessionId?: string
-}
+// Task and TaskStatus imported from ./agents/types.js
 
 export type AgentStatus = 'idle' | 'working' | 'done' | 'pending' | 'error'
 
@@ -61,7 +56,13 @@ export interface Agent {
   taskId: string
   personaId: string
   status: AgentStatus
-  fileChanges?: FileChange[]
+  fileChanges?: FileChange[]  // Deprecated — use fileChangePaths
+  fileChangePaths?: string[]
+  messages?: Message[]
+  sessionId?: string
+  planId?: string
+  createdAt?: string
+  completedAt?: string
 }
 
 export type PlanStatus = 'executing' | 'completed' | 'failed' | 'canceled'
@@ -81,24 +82,16 @@ export interface LizardVisual {
   color: string
 }
 
-export interface GektoSession {
-  id: string
-  title: string
-  messages: Message[]
-  plan?: ExecutionPlan
-  gektoSessionId: string
-  createdAt: string
-}
-
 export interface GektoAppState {
   plan: ExecutionPlan | null
   tasks: Record<string, Task>
   agents: Record<string, Agent>
   visuals: Record<string, LizardVisual>
-  chats: Record<string, Message[]>
+  chats: Record<string, Message[]> // Deprecated — messages move to agents
   personas: Persona[]
   plans: Record<string, Plan>
-  gektoSessions: GektoSession[]
+  fileChanges: Record<string, FileChange>
+  currentMasterId: string // ID of the active master chat session
 }
 
 // ============ Default Values ============
@@ -109,6 +102,10 @@ const DEFAULT_PERSONAS: Persona[] = [
   { id: 'codekeeper', name: 'Codekeeper', systemPrompt: 'You are a meticulous code reviewer. Focus on code quality, bugs, and improvements.' },
 ]
 
+function createMasterId(): string {
+  return `master_${Date.now()}`
+}
+
 function createEmptyState(): GektoAppState {
   return {
     plan: null,
@@ -118,76 +115,46 @@ function createEmptyState(): GektoAppState {
     chats: {},
     personas: DEFAULT_PERSONAS,
     plans: {},
-    gektoSessions: [],
+    fileChanges: {},
+    currentMasterId: createMasterId(),
   }
-}
-
-// ============ Persistence ============
-
-const STORE_FILENAME = 'gekto-store.json'
-
-function getStorePath(): string {
-  return path.join(process.cwd(), STORE_FILENAME)
 }
 
 // ============ In-Memory State ============
 
 let state: GektoAppState = createEmptyState()
 
-// Connected WebSocket clients for broadcasting diffs
+// Connected WebSocket clients for broadcasting actions
 const connectedClients = new Set<WebSocket>()
 
 // ============ Public API ============
 
-/** Load state from disk or create empty. Call once at startup. */
+/** Load state from disk or create empty. Call once at startup.
+ *
+ * Startup flow:
+ * 1. .gekto/ exists → load from entity store
+ * 2. Neither → create fresh .gekto/ with defaults
+ */
 export function initState(): void {
-  const storePath = getStorePath()
-  try {
-    if (fs.existsSync(storePath)) {
-      const raw = fs.readFileSync(storePath, 'utf8')
-      const stored = JSON.parse(raw)
+  const workingDir = process.cwd()
 
-      // Support both old format (version/data wrapper) and new format (direct state)
-      if (stored.version && stored.data) {
-        // Old format — migrate
-        const data = stored.data as Record<string, unknown>
-        state = createEmptyState()
-
-        // Migrate old store data
-        if (data.store && typeof data.store === 'object') {
-          const oldStore = data.store as Record<string, unknown>
-          if (oldStore.tasks) state.tasks = oldStore.tasks as Record<string, Task>
-          if (oldStore.agents) state.agents = oldStore.agents as Record<string, Agent>
-          if (oldStore.plans) state.plans = oldStore.plans as Record<string, Plan>
-          if (oldStore.personas) state.personas = oldStore.personas as Persona[]
-        }
-
-        // Migrate lizards → visuals
-        if (Array.isArray(data.lizards)) {
-          for (const l of data.lizards as Array<{ id: string; position: { x: number; y: number }; settings?: { color?: string } }>) {
-            state.visuals[l.id] = {
-              position: l.position,
-              color: l.settings?.color || '#BFFF6B',
-            }
-          }
-        }
-
-        // Migrate chats
-        if (data.chats && typeof data.chats === 'object') {
-          state.chats = data.chats as Record<string, Message[]>
-        }
-
-        // Persist in new format
-        persistState()
-      } else {
-        // New format — load directly
-        state = { ...createEmptyState(), ...stored }
-      }
+  // Try loading from .gekto/ directory
+  if (entityStoreExists(workingDir)) {
+    console.log('[State] Loading from .gekto/ directory')
+    const loaded = loadFromEntityStore(workingDir)
+    if (loaded) {
+      state = loaded
+      initEntityStore(workingDir)
+      rebuildOverview(state)
+      return
     }
-  } catch (err) {
-    console.error('[State] Failed to load state, starting fresh:', err)
-    state = createEmptyState()
   }
+
+  // Fresh start
+  console.log('[State] Creating fresh .gekto/ directory')
+  state = createEmptyState()
+  initEntityStore(workingDir)
+  persistFullState(state)
 }
 
 /** Return a readonly reference to current state. */
@@ -196,36 +163,46 @@ export function getState(): GektoAppState {
 }
 
 /**
- * Apply a mutation to state, persist to disk, and broadcast diff to all
- * connected WebSocket clients.
+ * Apply a mutation to state and persist to entity store.
+ * Does NOT broadcast — caller must use broadcast helpers explicitly.
  *
- * @param path  Dot-separated path into state (e.g. "tasks.task_1.status")
+ * @param dotPath  Dot-separated path into state (e.g. "tasks.task_1.status")
  * @param value The new value to set at that path
  */
-export function mutate(path: string, value: unknown): void {
-  setNestedValue(state as unknown as Record<string, unknown>, path, value)
-  persistState()
-  broadcastDiff(path, value)
+export function mutate(dotPath: string, value: unknown): void {
+  setNestedValue(state as unknown as Record<string, unknown>, dotPath, value)
+  persistMutation(dotPath, value, state)
+  // Keep overview.json in sync for agent/plan/task changes
+  if (dotPath.startsWith('agents.') || dotPath.startsWith('plan') || dotPath.startsWith('tasks.')) {
+    rebuildOverview(state)
+  }
 }
 
 /**
- * Apply multiple mutations atomically — single persist + single diff broadcast.
+ * Apply multiple mutations atomically — deduplicates entity file writes.
+ * Does NOT broadcast — caller must use broadcast helpers explicitly.
  */
 export function mutateBatch(mutations: Array<{ path: string; value: unknown }>): void {
   for (const { path, value } of mutations) {
     setNestedValue(state as unknown as Record<string, unknown>, path, value)
   }
-  persistState()
 
-  // Broadcast all diffs as a batch
-  const msg = JSON.stringify({
-    type: 'state_diff',
-    diffs: mutations.map(m => ({ path: m.path, value: m.value })),
-  })
-  for (const client of connectedClients) {
-    if (client.readyState === 1) { // WebSocket.OPEN
-      client.send(msg)
+  // Deduplicate entity writes: multiple mutations to same entity = one write
+  const entityKeys = new Set<string>()
+  for (const { path, value } of mutations) {
+    const key = path.split('.').slice(0, 2).join('.')
+    if (!entityKeys.has(key)) {
+      entityKeys.add(key)
+      persistMutation(path, value, state)
+    } else {
+      // Already persisted the entity — persist again with latest state
+      persistMutation(path, value, state)
     }
+  }
+
+  // Keep overview.json in sync
+  if (mutations.some(m => m.path.startsWith('agents.') || m.path.startsWith('plan') || m.path.startsWith('tasks.'))) {
+    rebuildOverview(state)
   }
 }
 
@@ -254,6 +231,108 @@ export function getClients(): Set<WebSocket> {
   return connectedClients
 }
 
+// ============ Typed Broadcast Helpers ============
+
+/** Send a typed action message to all connected clients. */
+export function broadcast(action: Record<string, unknown>): void {
+  const msg = JSON.stringify(action)
+  for (const client of connectedClients) {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(msg)
+    }
+  }
+}
+
+/** Broadcast the full plan object to all clients. */
+export function broadcastPlan(): void {
+  broadcast({ type: 'plan_set', plan: state.plan })
+}
+
+/** Broadcast a single task (full object) to all clients. */
+export function broadcastTask(taskId: string): void {
+  const task = state.tasks[taskId]
+  if (task) {
+    broadcast({ type: 'task_set', taskId, task })
+  } else {
+    broadcast({ type: 'task_delete', taskId })
+  }
+}
+
+/** Broadcast a single agent (full object) to all clients. */
+export function broadcastAgent(agentId: string): void {
+  const agent = state.agents[agentId]
+  if (agent) {
+    broadcast({ type: 'agent_set', agentId, agent })
+  } else {
+    broadcast({ type: 'agent_delete', agentId })
+  }
+}
+
+/** Broadcast the full visuals map to all clients. */
+export function broadcastVisuals(): void {
+  broadcast({ type: 'visuals_set', visuals: state.visuals })
+}
+
+/** Broadcast removal of a single visual. */
+export function broadcastVisualDelete(agentId: string): void {
+  broadcast({ type: 'visual_delete', agentId })
+}
+
+/** Broadcast a file change to all clients. */
+export function broadcastFileChange(path: string): void {
+  const change = state.fileChanges[path]
+  if (change) {
+    broadcast({ type: 'file_change_set', path, change })
+  }
+}
+
+/** Broadcast a chat for a specific agent to all clients. */
+export function broadcastChat(agentId: string): void {
+  const messages = state.chats[agentId]
+  if (messages) {
+    broadcast({ type: 'chat_set', agentId, messages })
+  }
+}
+
+/**
+ * Auto-broadcast based on a dot-path. Used by generic mutation endpoints
+ * (like save_state) where the caller doesn't know the entity type.
+ */
+export function broadcastForPath(dotPath: string): void {
+  const parts = dotPath.split('.')
+  const root = parts[0]
+
+  switch (root) {
+    case 'plan':
+      broadcastPlan()
+      break
+    case 'tasks':
+      if (parts[1]) broadcastTask(parts[1])
+      break
+    case 'agents':
+      if (parts[1]) broadcastAgent(parts[1])
+      break
+    case 'visuals':
+      if (parts.length === 1) {
+        broadcastVisuals()
+      } else if (parts[1]) {
+        // Single visual updated or deleted
+        if (state.visuals[parts[1]]) {
+          broadcastVisuals()
+        } else {
+          broadcastVisualDelete(parts[1])
+        }
+      }
+      break
+    case 'fileChanges':
+      if (parts[1]) broadcastFileChange(parts[1])
+      break
+    case 'chats':
+      if (parts[1]) broadcastChat(parts[1])
+      break
+  }
+}
+
 // ============ Helpers ============
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
@@ -271,26 +350,5 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
     delete current[lastKey]
   } else {
     current[lastKey] = value
-  }
-}
-
-function persistState(): void {
-  try {
-    const storePath = getStorePath()
-    fs.writeFileSync(storePath, JSON.stringify(state, null, 2), 'utf8')
-  } catch (err) {
-    console.error('[State] Failed to persist state:', err)
-  }
-}
-
-function broadcastDiff(path: string, value: unknown): void {
-  const msg = JSON.stringify({
-    type: 'state_diff',
-    diffs: [{ path, value }],
-  })
-  for (const client of connectedClients) {
-    if (client.readyState === 1) { // WebSocket.OPEN
-      client.send(msg)
-    }
   }
 }

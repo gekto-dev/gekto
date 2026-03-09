@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ChatBubbleIcon, ChevronDownIcon, ChevronUpIcon } from '@radix-ui/react-icons'
-import { useGekto, type Task } from '../context/GektoContext'
+import { useGekto, usePlanTasks, type Task } from '../context/GektoContext'
 import { useAgent } from '../context/AgentContext'
 
 interface GektoPlanPanelProps {
@@ -195,19 +195,20 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
 export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProps) {
   const [modalPrompt, setModalPrompt] = useState<Task | null>(null)
   const { currentPlan, generatePrompts, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, removeTask } = useGekto()
+  const tasks = usePlanTasks()
   const { killAgent } = useAgent()
   if (!currentPlan) return null
 
-  const completedCount = currentPlan.tasks.filter(t => t.status === 'completed').length
-  const pendingTestingCount = currentPlan.tasks.filter(t => t.status === 'pending_testing').length
-  const promptsGeneratedCount = currentPlan.tasks.filter(t => t.prompt && t.prompt.length > 0).length
-  const totalCount = currentPlan.tasks.length
+  const completedCount = tasks.filter(t => t.status === 'completed').length
+  const pendingTestingCount = tasks.filter(t => t.status === 'pending_testing').length
+  const promptsGeneratedCount = tasks.filter(t => t.prompt && t.prompt.length > 0).length
+  const totalCount = tasks.length
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0
   const promptProgress = totalCount > 0 ? (promptsGeneratedCount / totalCount) * 100 : 0
 
   // Show Build button when all tasks are resolved (empty list) or plan completed, and buildPrompt exists
   const showBuildButton = !!currentPlan.buildPrompt && (
-    currentPlan.tasks.length === 0 ||
+    tasks.length === 0 ||
     currentPlan.status === 'completed'
   )
 
@@ -342,19 +343,19 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                 <span className="ml-2">Analyzing task and creating plan</span>
               </div>
             </div>
-          ) : currentPlan.tasks.length === 0 ? (
+          ) : tasks.length === 0 ? (
             <div className="text-white/40 text-sm text-center py-4">
               No tasks in plan
             </div>
           ) : (
-            currentPlan.tasks.map(task => (
+            tasks.map(task => (
               <TaskRow
                 key={task.id}
                 task={task}
                 onMarkResolved={markTaskResolved}
                 onRun={runTask}
                 onStop={(taskId) => {
-                  const t = currentPlan.tasks.find(t => t.id === taskId)
+                  const t = tasks.find(t => t.id === taskId)
                   if (t?.assignedAgentId) killAgent(t.assignedAgentId)
                 }}
                 onRemove={removeTask}

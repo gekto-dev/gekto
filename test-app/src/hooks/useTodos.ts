@@ -1,9 +1,12 @@
 import { useState, useMemo } from 'react'
 import type { Todo, FilterType } from '../types/todo'
 
+type SortType = 'newest' | 'oldest'
+
 export function useTodos() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [filter, setFilter] = useState<FilterType>('all')
+  const [sort, setSort] = useState<SortType>('newest')
 
   const addTodo = (text: string) => {
     if (!text.trim()) return
@@ -29,15 +32,24 @@ export function useTodos() {
   }
 
   const filteredTodos = useMemo(() => {
+    let filtered: Todo[]
     switch (filter) {
       case 'active':
-        return todos.filter(todo => !todo.completed)
+        filtered = todos.filter(todo => !todo.completed)
+        break
       case 'completed':
-        return todos.filter(todo => todo.completed)
+        filtered = todos.filter(todo => todo.completed)
+        break
       default:
-        return todos
+        filtered = todos
     }
-  }, [todos, filter])
+
+    return [...filtered].sort((a, b) => {
+      return sort === 'newest'
+        ? b.createdAt - a.createdAt
+        : a.createdAt - b.createdAt
+    })
+  }, [todos, filter, sort])
 
   return {
     todos: filteredTodos,
@@ -46,5 +58,7 @@ export function useTodos() {
     deleteTodo,
     filter,
     setFilter,
+    sort,
+    setSort,
   }
 }

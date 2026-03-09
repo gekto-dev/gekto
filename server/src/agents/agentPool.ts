@@ -6,7 +6,7 @@ import { tmpdir } from 'os'
 import { WebSocket } from 'ws'
 import type { AgentProvider, StreamCallbacks, AgentResponse, FileChange } from './types.js'
 import { HeadlessAgent } from './HeadlessAgent.js'
-import { getState, mutate } from '../state.js'
+import { getState, mutate, broadcastFileChange, broadcastAgent } from '../state.js'
 
 interface QueuedMessage {
   message: string
@@ -121,9 +121,15 @@ export function getQueueLength(lizardId: string): number {
 }
 
 // Helper to safely send to current WebSocket
-function safeSend(session: LizardSession, data: object) {
+function safeSend(session: LizardSession, data: Record<string, unknown>) {
   const ws = session.currentWs
   if (ws && ws.readyState === ws.OPEN) {
+    const type = data.type as string
+    const lizardId = data.lizardId as string | undefined
+    // Log outgoing messages (skip noisy streaming deltas)
+    if (type !== 'text' && type !== 'thinking') {
+      console.log(`[WS→] ${type}${lizardId ? ` [${lizardId}]` : ''}${data.tool ? ` tool=${data.tool}` : ''}${data.state ? ` state=${data.state}` : ''}`)
+    }
     ws.send(JSON.stringify(data))
   }
 }
@@ -215,9 +221,30 @@ export async function sendMessage(
       })
     },
     onFileChange: (change: FileChange) => {
-      // Persist file change in server state
+      // Encode path for use as key
+      const encodedPath = change.filePath.replace(/\//g, '--')
+
+      // Enrich change with metadata
+      const enrichedChange: FileChange = {
+        ...change,
+        agentId: lizardId,
+        taskId: getState().agents[lizardId]?.taskId,
+        timestamp: new Date().toISOString(),
+      }
+
+      // Write to top-level fileChanges collection
+      mutate(`fileChanges.${encodedPath}`, enrichedChange)
+      broadcastFileChange(encodedPath)
+
+      // Also update agent's fileChangePaths for reference
       const agent = getState().agents[lizardId]
       if (agent) {
+        const paths = agent.fileChangePaths ?? []
+        if (!paths.includes(change.filePath)) {
+          mutate(`agents.${lizardId}.fileChangePaths`, [...paths, change.filePath])
+        }
+
+        // Keep backward-compat fileChanges on agent
         const existing = agent.fileChanges ?? []
         const existingIndex = existing.findIndex(fc => fc.filePath === change.filePath)
         let updated: FileChange[]
@@ -225,14 +252,16 @@ export async function sendMessage(
           updated = [...existing]
           updated[existingIndex] = { ...updated[existingIndex], after: change.after, tool: change.tool }
         } else {
-          updated = [...existing, change]
+          updated = [...existing, enrichedChange]
         }
         mutate(`agents.${lizardId}.fileChanges`, updated)
+        broadcastAgent(lizardId)
       }
+
       safeSend(session, {
         type: 'file_change',
         lizardId,
-        change,
+        change: enrichedChange,
       })
     },
   }

@@ -1,17 +1,20 @@
-import type { Todo, FilterType } from '../types/todo'
+import type { Todo, FilterType, SortType } from '../types/todo'
 import { TodoItem } from './TodoItem'
 
 interface TodoListProps {
   todos: Todo[]
   filter: FilterType
   setFilter: (filter: FilterType) => void
+  sort: SortType
+  setSort: (sort: SortType) => void
   onToggle: (id: string) => void
   onDelete: (id: string) => void
 }
 
 const filters: FilterType[] = ['all', 'active', 'completed']
+const sorts: SortType[] = ['newest', 'oldest']
 
-export function TodoList({ todos, filter, setFilter, onToggle, onDelete }: TodoListProps) {
+export function TodoList({ todos, filter, setFilter, sort, setSort, onToggle, onDelete }: TodoListProps) {
   return (
     <div>
       <div
@@ -40,6 +43,35 @@ export function TodoList({ todos, filter, setFilter, onToggle, onDelete }: TodoL
             {f}
           </button>
         ))}
+
+        <div
+          style={{
+            width: 1,
+            background: '#333',
+            margin: '0 8px',
+          }}
+        />
+
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortType)}
+          style={{
+            background: '#1a1a1a',
+            color: '#888',
+            border: '1px solid #333',
+            borderRadius: 6,
+            padding: '8px 16px',
+            fontSize: 14,
+            fontWeight: 500,
+            cursor: 'pointer',
+          }}
+        >
+          {sorts.map(s => (
+            <option key={s} value={s} style={{ textTransform: 'capitalize' }}>
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div>

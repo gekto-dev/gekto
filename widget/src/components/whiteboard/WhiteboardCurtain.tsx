@@ -289,19 +289,21 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
     return () => setOnTitleChange(null)
   }, [agents, updateTask])
 
-  // Build agentsWithTasks array for sync hook
+  // Build agentsWithTasks array for sync hook (exclude master agent)
   const agentsWithTasks = useMemo(() =>
-    Object.values(agents).map(agent => {
-      const session = sessions.get(agent.id)
-      return {
-        agent,
-        task: tasks[agent.taskId],
-        currentTool: session?.currentTool?.tool,
-        streamingText: session?.streamingText,
-        workingDir,
-        fileChangeCount: agent.fileChanges?.length ?? 0,
-      }
-    }),
+    Object.values(agents)
+      .filter(agent => agent.id !== 'master')
+      .map(agent => {
+        const session = sessions.get(agent.id)
+        return {
+          agent,
+          task: tasks[agent.taskId],
+          currentTool: session?.currentTool?.tool,
+          streamingText: session?.streamingText,
+          workingDir,
+          fileChangeCount: agent.fileChanges?.length ?? 0,
+        }
+      }),
     [agents, tasks, sessions, workingDir]
   )
 
@@ -351,7 +353,7 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
     const agentId = `agent_${timestamp}`
 
     // Count existing agents for naming
-    const existingCount = Object.keys(agents).length
+    const existingCount = Object.values(agents).filter(a => a.id !== 'master').length
 
     // Create task in store
     createTask({

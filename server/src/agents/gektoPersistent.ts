@@ -91,18 +91,58 @@ let opusReceivedDeltas = false
 // Session ID for persistent history - generated once and shared across all Gekto calls
 // This allows both direct mode (persistent process) and plan mode (one-shot calls) to share history
 let gektoSessionId: string = randomUUID()
+let sessionConflictRetries = 0
+const MAX_SESSION_RETRIES = 3
+
+// Conversation history to replay when starting a fresh session (e.g. after session lock conflict)
+let pendingHistoryReplay: string | null = null
+let historyReplayed = false
 
 let workingDir = process.cwd()
 let stateChangeCallback: ((state: GektoState) => void) | null = null
 
 // === Initialization ===
 
-export function initGekto(cwd: string, onStateChange?: (state: GektoState) => void): void {
+export interface StoredMessage {
+  text: string
+  sender: 'user' | 'bot' | 'system'
+}
+
+export function initGekto(
+  cwd: string,
+  onStateChange?: (state: GektoState) => void,
+  sessionId?: string,
+  messages?: StoredMessage[],
+): void {
   workingDir = cwd
   stateChangeCallback = onStateChange || null
 
+  // Restore previous session if available
+  if (sessionId) {
+    gektoSessionId = sessionId
+  }
+
+  // Store conversation history for replay if session can't be resumed
+  if (messages && messages.length > 0) {
+    pendingHistoryReplay = formatHistoryForReplay(messages)
+  }
+  historyReplayed = false
+
   // Start Opus process
   spawnOpus()
+}
+
+function formatHistoryForReplay(messages: StoredMessage[]): string {
+  // Only include user and bot messages, skip system/tool messages
+  const relevant = messages.filter(m => m.sender === 'user' || m.sender === 'bot')
+  if (relevant.length === 0) return ''
+
+  const lines = relevant.map(m => {
+    const role = m.sender === 'user' ? 'User' : 'You (Gekto)'
+    return `${role}: ${m.text}`
+  })
+
+  return `[CONVERSATION HISTORY — this is our previous conversation, continue from where we left off]\n\n${lines.join('\n\n')}\n\n[END OF HISTORY — respond normally to the next message]`
 }
 
 export function getGektoState(): GektoState {
@@ -131,7 +171,9 @@ function spawnOpus(): void {
     '--session-id', gektoSessionId,
   ]
 
-  console.log(`[GektoPersistent] Spawning: "${CLAUDE_PATH}"`)
+  console.log(`[GektoPersistent] Spawning with session ${gektoSessionId}`)
+
+  let sessionConflict = false
 
   opusProcess = spawn(CLAUDE_PATH, args, {
     cwd: workingDir,
@@ -163,7 +205,11 @@ function spawnOpus(): void {
   })
 
   opusProcess.stderr.on('data', (data) => {
-    console.error(`[GektoPersistent] stderr:`, data.toString().trim())
+    const text = data.toString().trim()
+    console.error(`[GektoPersistent] stderr:`, text)
+    if (text.includes('already in use')) {
+      sessionConflict = true
+    }
   })
 
   opusProcess.on('close', (code) => {
@@ -177,6 +223,25 @@ function spawnOpus(): void {
       opusPendingResolve('Process restarting, please try again.')
       opusPendingResolve = null
     }
+
+    // If session ID was rejected, retry same ID (lock may be stale from old process)
+    if (sessionConflict) {
+      sessionConflictRetries++
+      if (sessionConflictRetries <= MAX_SESSION_RETRIES) {
+        console.error(`[GektoPersistent] Session ID conflict, retrying same session in ${sessionConflictRetries * 2}s (${sessionConflictRetries}/${MAX_SESSION_RETRIES})`)
+        setTimeout(spawnOpus, sessionConflictRetries * 2000)
+        return
+      }
+      // All retries exhausted — start fresh
+      console.error(`[GektoPersistent] Session lock not released after ${MAX_SESSION_RETRIES} retries, starting new session`)
+      gektoSessionId = randomUUID()
+      sessionConflictRetries = 0
+      setTimeout(spawnOpus, 100)
+      return
+    }
+
+    // Successful start — reset conflict counter
+    sessionConflictRetries = 0
 
     // Auto-restart
     setTimeout(spawnOpus, 1000)
@@ -271,6 +336,15 @@ async function sendToOpus(prompt: string, callbacks: GektoCallbacks, retries = 3
     throw new Error('Gekto process failed to start after retries')
   }
 
+  // Inject conversation history on first message if session couldn't be resumed
+  let actualPrompt = prompt
+  if (pendingHistoryReplay && !historyReplayed) {
+    actualPrompt = `${pendingHistoryReplay}\n\n${prompt}`
+    historyReplayed = true
+    pendingHistoryReplay = null
+    console.log(`[GektoPersistent] Injected conversation history into first message`)
+  }
+
   opusCallbacks = callbacks
   opusCurrentTool = null
   opusReceivedDeltas = false
@@ -283,7 +357,7 @@ async function sendToOpus(prompt: string, callbacks: GektoCallbacks, retries = 3
 
     const inputMessage = {
       type: 'user',
-      message: { role: 'user', content: prompt },
+      message: { role: 'user', content: actualPrompt },
     }
     if (opusProcess && !opusProcess.killed && opusProcess.stdin.writable) {
       opusProcess.stdin.write(JSON.stringify(inputMessage) + '\n')
