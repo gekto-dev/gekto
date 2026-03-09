@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, type DragEvent } from 'react'
-import { FileTextIcon, TrashIcon, ImageIcon } from '@radix-ui/react-icons'
+import { useState, useRef, useEffect, useCallback, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { FileTextIcon, TrashIcon, ImageIcon, CounterClockwiseClockIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAgent, useAgentMessageListener, type Message } from '../context/AgentContext'
@@ -91,6 +91,10 @@ export function ChatWindow({
   const [stagedImages, setStagedImages] = useState<string[]>([])
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [isRestoredSession, setIsRestoredSession] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [historySessions, setHistorySessions] = useState<Array<{ id: string; createdAt: string; preview: string; messageCount: number; isCurrent: boolean }>>([])
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const historyRef = useRef<HTMLDivElement>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -238,6 +242,16 @@ export function ChatWindow({
   // For master, resolve to the actual master session ID (e.g. master_1772966060233)
   const resolvedMasterId = isMaster ? serverState.currentMasterId : lizardId
   const agentMessages = serverState.agents[resolvedMasterId || lizardId]?.messages
+
+  // Reset history when the resolved master changes (e.g. session restore/archive)
+  const prevResolvedRef = useRef(resolvedMasterId)
+  useEffect(() => {
+    if (prevResolvedRef.current !== resolvedMasterId) {
+      prevResolvedRef.current = resolvedMasterId
+      setHistoryLoaded(false)
+    }
+  }, [resolvedMasterId])
+
   useEffect(() => {
     if (historyLoaded || !serverReady) return
 
@@ -556,6 +570,7 @@ export function ChatWindow({
           sender: m.sender,
           timestamp: toIso(m.timestamp),
           isTerminal: m.isTerminal,
+          isThinking: m.isThinking,
           images: m.images,
           toolUse: m.toolUse ? {
             tool: m.toolUse.tool,
@@ -609,6 +624,62 @@ export function ChatWindow({
       }))
     }
   }
+
+  // History panel: fetch sessions list and handle restore
+  const handleToggleHistory = () => {
+    if (showHistory) {
+      setShowHistory(false)
+      return
+    }
+    const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const handler = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'gekto_sessions') {
+            setHistorySessions(data.sessions)
+            setShowHistory(true)
+            ws.removeEventListener('message', handler)
+          }
+        } catch { /* ignore */ }
+      }
+      ws.addEventListener('message', handler)
+      ws.send(JSON.stringify({ type: 'list_gekto_sessions' }))
+      // Timeout cleanup
+      setTimeout(() => ws.removeEventListener('message', handler), 3000)
+    }
+  }
+
+  const handleRestoreSession = (sessionId: string) => {
+    const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'restore_gekto_session', sessionId }))
+    }
+    setShowHistory(false)
+    setIsRestoredSession(true)
+    // historyLoaded resets automatically when resolvedMasterId changes via server response
+  }
+
+  const handleDeleteSession = (sessionId: string) => {
+    const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'delete_gekto_session', sessionId }))
+    }
+    setHistorySessions(prev => prev.filter(s => s.id !== sessionId))
+    setConfirmDeleteId(null)
+  }
+
+  // Close history panel on click outside
+  useEffect(() => {
+    if (!showHistory) return
+    const handleClick = (e: globalThis.MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setShowHistory(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showHistory])
 
   const toggleToolExpanded = (messageId: string) => {
     setExpandedTools(prev => {
@@ -774,6 +845,93 @@ export function ChatWindow({
           </div>
         </div>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+          {isMaster && (
+            <div className="relative" ref={historyRef}>
+              <button
+                onClick={handleToggleHistory}
+                className={`text-white/40 hover:text-white/70 transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded ${showHistory ? 'text-white/70 bg-white/10' : ''}`}
+                title="Chat history"
+              >
+                <CounterClockwiseClockIcon width={14} height={14} />
+              </button>
+              {showHistory && (
+                <div
+                  className="absolute right-0 top-8 z-50 rounded-lg overflow-hidden"
+                  style={{
+                    width: 280,
+                    maxHeight: 320,
+                    background: 'rgb(30, 30, 40)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  <div className="px-3 py-2 text-xs text-white/50 font-medium" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    Chat History
+                  </div>
+                  <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                    {historySessions.length === 0 && (
+                      <div className="px-3 py-4 text-xs text-white/30 text-center">No previous chats</div>
+                    )}
+                    {historySessions.map(session => (
+                      <div
+                        key={session.id}
+                        className={`relative flex items-center transition-colors ${session.isCurrent ? 'bg-white/5' : 'hover:bg-white/10'}`}
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', height: 44 }}
+                      >
+                        {confirmDeleteId === session.id ? (
+                          <div className="flex items-center gap-2 px-3 py-2 w-full">
+                            <span className="text-xs text-white/60 flex-1">Delete this chat?</span>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.id) }}
+                              className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded hover:bg-red-400/10"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
+                              className="text-[10px] text-white/40 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/10"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => !session.isCurrent && handleRestoreSession(session.id)}
+                              disabled={session.isCurrent}
+                              className={`flex-1 text-left px-3 py-2 ${session.isCurrent ? 'cursor-default' : 'cursor-pointer'}`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-white/80 truncate flex-1">
+                                  {session.preview}
+                                </span>
+                                {session.isCurrent && (
+                                  <span className="text-[10px] text-green-400/70 shrink-0">current</span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-white/30 mt-0.5">
+                                {session.createdAt ? new Date(session.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                                {' · '}{session.messageCount} msgs
+                              </div>
+                            </button>
+                            {!session.isCurrent && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(session.id) }}
+                                className="text-white/15 hover:text-white/40 px-1.5 shrink-0 transition-colors text-[10px]"
+                                title="Delete chat"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={handleClearChat}
             className="text-white/40 hover:text-white/70 transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded"

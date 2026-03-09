@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto'
 import { initGekto, getGektoState, abortGekto, setStateCallback, resetGektoSession, restoreGektoSession, getGektoSessionId } from './gektoPersistent.js'
 import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, getClients, broadcastPlan, broadcastTask, broadcastAgent, broadcastVisuals, broadcastVisualDelete, broadcastForPath, type Agent, type Message } from '../state.js'
 import { persistEntity } from '../entityStore.js'
+import fs from 'fs'
+import nodePath from 'path'
 
 let gektoInitialized = false
 
@@ -125,6 +127,43 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               sessions,
             }))
             return
+
+          case 'list_gekto_sessions': {
+            // List archived master sessions from disk (.gekto/ is in server cwd, not working dir)
+            try {
+              const agentsDir = nodePath.join(process.cwd(), '.gekto', 'agents')
+              const files = fs.readdirSync(agentsDir).filter(f => f.startsWith('master_') && f.endsWith('.json'))
+              const currentState = getState()
+              const sessions: Array<{ id: string; createdAt: string; preview: string; messageCount: number; isCurrent: boolean }> = []
+
+              for (const file of files) {
+                try {
+                  const data = JSON.parse(fs.readFileSync(nodePath.join(agentsDir, file), 'utf8'))
+                  const msgs = data.messages || []
+                  const firstUserMsg = msgs.find((m: { sender: string }) => m.sender === 'user')
+                  sessions.push({
+                    id: data.id || file.replace('.json', ''),
+                    createdAt: data.createdAt || '',
+                    preview: firstUserMsg?.text?.substring(0, 80) || '(empty chat)',
+                    messageCount: msgs.length,
+                    isCurrent: data.id === currentState.currentMasterId,
+                  })
+                } catch { /* skip corrupted files */ }
+              }
+
+              // Current chat always on top, then newest first
+              sessions.sort((a, b) => {
+                if (a.isCurrent) return -1
+                if (b.isCurrent) return 1
+                return b.createdAt.localeCompare(a.createdAt)
+              })
+
+              ws.send(JSON.stringify({ type: 'gekto_sessions', sessions }))
+            } catch {
+              ws.send(JSON.stringify({ type: 'gekto_sessions', sessions: [] }))
+            }
+            return
+          }
 
           case 'kill_all': {
             const killedCount = killAllSessions()
@@ -407,6 +446,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               agentId = state.currentMasterId
             }
 
+            // Don't overwrite archived sessions — save_chat may arrive late after archive
+            if (state.agents[agentId]?.status === 'done') return
+
             if (state.agents[agentId]) {
               mutate(`agents.${agentId}.messages`, messages)
             } else {
@@ -554,15 +596,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             const oldMasterId = currentState.currentMasterId
             const archiveSessionId = getGektoSessionId()
 
-            // Mark current master as archived
+            // Mark current master as archived — always save messages from the request
             if (currentState.agents[oldMasterId]) {
               mutateBatch([
+                { path: `agents.${oldMasterId}.messages`, value: archiveMessages },
                 { path: `agents.${oldMasterId}.status`, value: 'done' },
                 { path: `agents.${oldMasterId}.completedAt`, value: new Date().toISOString() },
                 { path: `agents.${oldMasterId}.sessionId`, value: archiveSessionId },
               ])
             } else {
-              // Current master had no agent record — persist the archived messages
               mutate(`agents.${oldMasterId}`, {
                 id: oldMasterId,
                 taskId: '',
@@ -591,6 +633,26 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             return
           }
 
+          case 'delete_gekto_session': {
+            const { sessionId: deleteId } = msg as { sessionId: string }
+            // Don't allow deleting current session
+            const currentState = getState()
+            if (deleteId === currentState.currentMasterId) return
+
+            // Remove from memory if loaded
+            if (currentState.agents[deleteId]) {
+              mutate(`agents.${deleteId}`, undefined)
+            }
+            // Delete file from disk
+            try {
+              const filePath = nodePath.join(process.cwd(), '.gekto', 'agents', `${deleteId}.json`)
+              if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath)
+              }
+            } catch { /* ignore */ }
+            return
+          }
+
           case 'restore_gekto_session': {
             const { sessionId: restoreId } = msg as { sessionId: string }
             const currentState = getState()
@@ -600,9 +662,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             if (!agentSession) {
               // Try loading from disk (archived agents with status 'done' aren't in memory)
               try {
-                const fs = await import('fs')
-                const path = await import('path')
-                const filePath = path.join(process.cwd(), '.gekto', 'agents', `${restoreId}.json`)
+                const filePath = nodePath.join(process.cwd(), '.gekto', 'agents', `${restoreId}.json`)
                 if (fs.existsSync(filePath)) {
                   agentSession = JSON.parse(fs.readFileSync(filePath, 'utf8'))
                 }
