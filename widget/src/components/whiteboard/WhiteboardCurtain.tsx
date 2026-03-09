@@ -292,7 +292,7 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
   // Build agentsWithTasks array for sync hook (exclude master agent)
   const agentsWithTasks = useMemo(() =>
     Object.values(agents)
-      .filter(agent => agent.id !== 'master')
+      .filter(agent => agent.id !== 'master' && !agent.id.startsWith('master_'))
       .map(agent => {
         const session = sessions.get(agent.id)
         return {

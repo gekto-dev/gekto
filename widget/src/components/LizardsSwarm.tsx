@@ -18,7 +18,7 @@ function LizardsList() {
 
   return (
     <>
-      {Object.values(agents).filter(a => a.id !== 'master').map(agent => {
+      {Object.values(agents).filter(a => a.id !== 'master' && !a.id.startsWith('master_')).map(agent => {
         const visual = visuals[agent.id]
         if (!visual) return null // Visual not yet created
 

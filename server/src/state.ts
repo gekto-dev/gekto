@@ -38,6 +38,7 @@ export interface Message {
   systemType?: 'mode' | 'status' | 'info'
   systemData?: Record<string, unknown>
   isStreaming?: boolean
+  isThinking?: boolean
 }
 
 export interface Persona {

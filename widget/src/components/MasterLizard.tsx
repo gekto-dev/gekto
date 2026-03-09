@@ -39,14 +39,12 @@ export function MasterLizard() {
   const [isHovered, setIsHovered] = useState(false)
   const [chatSize, setChatSize] = useState(getChatSize)
 
-  // Sync plan panel with chat: open when chat is open and plan exists, close when chat closes
+  // Close plan panel when chat closes (opening is handled by plan_created event in GektoContext)
   useEffect(() => {
-    if (isChatOpen && currentPlan) {
-      openPlanPanel()
-    } else if (!isChatOpen) {
+    if (!isChatOpen) {
       closePlanPanel()
     }
-  }, [isChatOpen, currentPlan, openPlanPanel, closePlanPanel])
+  }, [isChatOpen, closePlanPanel])
 
   const menuItems = [
     {

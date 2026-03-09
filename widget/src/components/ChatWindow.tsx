@@ -246,6 +246,8 @@ export function ChatWindow({
       setMessages(agentMessages.map(m => ({
         ...m,
         timestamp: typeof m.timestamp === 'string' ? new Date(m.timestamp) : m.timestamp,
+        // Restore isThinking from persisted flag or ID pattern (legacy data)
+        isThinking: m.isThinking || m.id.includes('_thinking_'),
         toolUse: m.toolUse ? {
           ...m.toolUse,
           startTime: typeof m.toolUse.startTime === 'string' ? new Date(m.toolUse.startTime) : m.toolUse.startTime,
@@ -279,6 +281,7 @@ export function ChatWindow({
       sender: m.sender,
       timestamp: toIso(m.timestamp),
       isTerminal: m.isTerminal,
+      isThinking: m.isThinking,
       images: m.images,
       toolUse: m.toolUse ? {
         tool: m.toolUse.tool,

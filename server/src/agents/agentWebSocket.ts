@@ -402,6 +402,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             const state = getState()
 
             // Resolve 'master' to the current master session ID
+            const isMasterChat = agentId === 'master' || agentId.startsWith('master_')
             if (agentId === 'master') {
               agentId = state.currentMasterId
             }
@@ -419,7 +420,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 createdAt: new Date().toISOString(),
               })
             }
-            broadcastAgent(agentId)
+            // Don't broadcast master agent changes — it's not a worker lizard
+            if (!isMasterChat) {
+              broadcastAgent(agentId)
+            }
             return
           }
 
