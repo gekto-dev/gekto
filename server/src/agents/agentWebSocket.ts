@@ -120,6 +120,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             }))
             return
 
+          case 'request_snapshot':
+            sendSnapshot(ws)
+            return
+
           case 'debug_pool':
             const sessions = getActiveSessions()
             ws.send(JSON.stringify({
@@ -815,7 +819,14 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
           case 'kill': {
             // For master, abort the persistent Gekto process instead of killing session
-            const killed = lizardId === 'master' ? abortGekto() : killSession(lizardId)
+            let killed: boolean
+            if (lizardId === 'master') {
+              // Pass chat history so restarted process can replay context
+              const masterAgent = getState().agents[getState().currentMasterId]
+              killed = abortGekto(masterAgent?.messages as import('./gektoPersistent.js').StoredMessage[] | undefined)
+            } else {
+              killed = killSession(lizardId)
+            }
             ws.send(JSON.stringify({
               type: 'kill_result',
               lizardId,

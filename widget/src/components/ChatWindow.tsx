@@ -252,10 +252,25 @@ export function ChatWindow({
     }
   }, [resolvedMasterId])
 
+  // Keep a ref to the latest messages for defensive checks
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+
   useEffect(() => {
     if (historyLoaded || !serverReady) return
 
+    console.log('[ChatWindow] History loading:', { messagesLen: messagesRef.current.length, agentMessagesLen: agentMessages?.length, resolvedMasterId })
+
+    // If we already have real messages in local state (e.g. from before HMR/reconnect),
+    // don't overwrite them with potentially stale server data
+    if (messagesRef.current.length > 1 || (messagesRef.current.length === 1 && messagesRef.current[0].sender === 'user')) {
+      console.log('[ChatWindow] Skipping load — already have messages')
+      setHistoryLoaded(true)
+      return
+    }
+
     if (agentMessages && agentMessages.length > 0) {
+      console.log('[ChatWindow] Loading', agentMessages.length, 'messages from server')
       // Server has history — load it
       setMessages(agentMessages.map(m => ({
         ...m,
@@ -271,6 +286,7 @@ export function ChatWindow({
         } : undefined,
       })) as Message[])
     } else {
+      console.log('[ChatWindow] No server messages — showing greeting')
       // Server has no history — show greeting
       const greeting = lizardId === MASTER_ID
         ? `**Hey, I'm Gekto** — your project manager.\n\nI research the codebase, break your request into parallel tasks, and spawn agents to execute them.`
@@ -571,6 +587,52 @@ export function ChatWindow({
   const removeStagedImage = (index: number) => {
     setStagedImages(prev => prev.filter((_, i) => i !== index))
   }
+
+  // Save current messages to server + client-side state immediately
+  const saveMessagesNow = useCallback(() => {
+    if (messages.length === 0) return
+    const toIso = (v: Date | string): string => v instanceof Date ? v.toISOString() : String(v)
+    const toSave = messages.map(m => ({
+      id: m.id,
+      text: m.text,
+      sender: m.sender,
+      timestamp: toIso(m.timestamp),
+      isTerminal: m.isTerminal,
+      isThinking: m.isThinking,
+      images: m.images,
+      toolUse: m.toolUse ? {
+        tool: m.toolUse.tool,
+        input: m.toolUse.input,
+        fullInput: m.toolUse.fullInput,
+        status: m.toolUse.status,
+        startTime: toIso(m.toolUse.startTime),
+        endTime: m.toolUse.endTime ? toIso(m.toolUse.endTime) : undefined,
+      } : undefined,
+    }))
+    const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'save_chat', agentId: lizardId, messages: toSave }))
+    }
+    if (isMaster && resolvedMasterId) {
+      updateLocalAgentMessages(resolvedMasterId, toSave as import('../hooks/useServerState').Message[])
+    }
+  }, [messages, lizardId, isMaster, resolvedMasterId])
+
+  const handleStop = useCallback(() => {
+    // Save to server, kill, then request fresh state from server (like a restart)
+    saveMessagesNow()
+    killAgent(lizardId)
+    // Clear local state and request fresh snapshot from server
+    setMessages([])
+    setHistoryLoaded(false)
+    const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Small delay to let save_chat persist before requesting snapshot
+      setTimeout(() => {
+        ws.send(JSON.stringify({ type: 'request_snapshot' }))
+      }, 200)
+    }
+  }, [saveMessagesNow, killAgent, lizardId])
 
   const handlePermissionResponse = (approved: boolean) => {
     respondToPermission(lizardId, approved)
@@ -1404,7 +1466,7 @@ export function ChatWindow({
               </button>
               {agentState === 'working' ? (
                 <button
-                  onClick={() => killAgent(lizardId)}
+                  onClick={handleStop}
                   className="flex items-center gap-1 px-2 py-1 text-xs transition-all hover:bg-red-500/30 rounded cursor-pointer"
                   style={{
                     background: 'rgba(239, 68, 68, 0.15)',

@@ -465,7 +465,7 @@ export function restoreGektoSession(sessionId: string): void {
 
 // === Abort current task (like pressing ESC in CLI) ===
 
-export function abortGekto(): boolean {
+export function abortGekto(messages?: StoredMessage[]): boolean {
   let aborted = false
 
   // Send SIGINT to interrupt current Opus task (like Ctrl+C / ESC)
@@ -477,6 +477,13 @@ export function abortGekto(): boolean {
     opusCallbacks = null
     opusCurrentTool = null
     aborted = true
+
+    // Set up history replay so restarted process has conversation context
+    // (SIGINT may not save the interrupted turn to the session)
+    if (messages && messages.length > 0) {
+      pendingHistoryReplay = formatHistoryForReplay(messages)
+      historyReplayed = false
+    }
   }
 
   return aborted
