@@ -206,8 +206,10 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0
   const promptProgress = totalCount > 0 ? (promptsGeneratedCount / totalCount) * 100 : 0
 
-  // Show Build button when all tasks are resolved (empty list) or plan completed, and buildPrompt exists
+  // Show Build button when all tasks are done (pending_testing or completed), and buildPrompt exists
+  const allTasksDone = totalCount > 0 && tasks.every(t => t.status === 'completed' || t.status === 'pending_testing')
   const showBuildButton = !!currentPlan.buildPrompt && (
+    allTasksDone ||
     tasks.length === 0 ||
     currentPlan.status === 'completed'
   )

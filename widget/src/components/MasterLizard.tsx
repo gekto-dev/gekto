@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChatBubbleIcon, PlusCircledIcon, Cross2Icon, DashboardIcon, ListBulletIcon } from '@radix-ui/react-icons'
+import { ChatBubbleIcon, PlusCircledIcon, Cross2Icon, DashboardIcon } from '@radix-ui/react-icons'
 import { LizardAvatar } from './LizardAvatar'
 import { ChatWindow, getChatSize } from './ChatWindow'
 import { GektoPlanPanel } from './GektoPlanPanel'
@@ -55,20 +55,6 @@ export function MasterLizard() {
       active: isChatOpen,
       onClick: () => isChatOpen ? closeChat() : openChat(MASTER_ID, 'task'),
     },
-    ...(currentPlan ? [{
-      id: 'plan',
-      icon: <ListBulletIcon width={20} height={20} />,
-      label: isPlanPanelOpen ? 'Close Plan' : 'Plan',
-      active: isPlanPanelOpen,
-      onClick: () => {
-        if (isPlanPanelOpen) {
-          closePlanPanel()
-        } else {
-          openPlanPanel()
-          if (!isChatOpen) openChat(MASTER_ID, 'task')
-        }
-      },
-    }] : []),
     {
       id: 'spawn',
       icon: <PlusCircledIcon width={20} height={20} />,
@@ -223,28 +209,28 @@ export function MasterLizard() {
       </div>
 
       {/* Chat Window - positioned to the right of master lizard */}
-      {isChatOpen && (
-        <div
-          className="fixed"
-          data-swarm-ui
-          style={{
-            left: position.x + MASTER_LIZARD_SIZE + 20,
-            top: position.y + MASTER_LIZARD_SIZE - chatSize.height,
-            zIndex: 1002,
-            pointerEvents: 'auto',
-          }}
-        >
-          <ChatWindow
-            lizardId={MASTER_ID}
-            title={chatMode === 'plan' ? 'Master Plan' : 'Gekto Chat'}
-            color="rgba(191, 255, 107, 0.5)"
-            onClose={closeChat}
-            onResize={setChatSize}
-            inputRef={inputRef}
-            onHeaderMouseDown={handlers.onMouseDown}
-          />
-        </div>
-      )}
+      {/* Always mounted (CSS hide) to preserve chat state across open/close cycles */}
+      <div
+        className="fixed"
+        data-swarm-ui
+        style={{
+          left: position.x + MASTER_LIZARD_SIZE + 20,
+          top: position.y + MASTER_LIZARD_SIZE - chatSize.height,
+          zIndex: 1002,
+          pointerEvents: isChatOpen ? 'auto' : 'none',
+          display: isChatOpen ? undefined : 'none',
+        }}
+      >
+        <ChatWindow
+          lizardId={MASTER_ID}
+          title={chatMode === 'plan' ? 'Master Plan' : 'Gekto Chat'}
+          color="rgba(191, 255, 107, 0.5)"
+          onClose={closeChat}
+          onResize={setChatSize}
+          inputRef={inputRef}
+          onHeaderMouseDown={handlers.onMouseDown}
+        />
+      </div>
 
       {/* Plan Panel - positioned to the right of chat or master lizard */}
       {isPlanPanelOpen && currentPlan && (

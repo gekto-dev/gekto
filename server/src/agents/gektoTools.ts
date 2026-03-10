@@ -44,20 +44,62 @@ interface GektoStructuredOutput {
 }
 
 function parseGektoOutput(raw: string): GektoStructuredOutput | null {
-  // With --json-schema, output should be valid JSON. Try direct parse first.
+  // Try direct parse first (ideal case: pure JSON output)
   try {
     return JSON.parse(raw)
   } catch {
-    // Fallback: strip markdown fences and retry
-    const stripped = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '')
-    try {
-      return JSON.parse(stripped)
-    } catch (err) {
-      console.error('[Gekto] Failed to parse structured output:', err)
-      console.error('[Gekto] Raw output (first 500 chars):', raw.slice(0, 500))
-      return null
+    // noop
+  }
+
+  // Strip markdown fences and retry
+  const stripped = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '')
+  try {
+    return JSON.parse(stripped)
+  } catch {
+    // noop
+  }
+
+  // Gekto sometimes outputs text before/after the JSON (e.g. "Let me create the plan:\n{...}")
+  // Extract the first top-level JSON object from the output
+  const firstBrace = raw.indexOf('{')
+  if (firstBrace >= 0) {
+    // Find the matching closing brace by counting depth
+    let depth = 0
+    let inString = false
+    let escape = false
+    for (let i = firstBrace; i < raw.length; i++) {
+      const ch = raw[i]
+      if (escape) {
+        escape = false
+        continue
+      }
+      if (ch === '\\' && inString) {
+        escape = true
+        continue
+      }
+      if (ch === '"') {
+        inString = !inString
+        continue
+      }
+      if (inString) continue
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          const jsonStr = raw.slice(firstBrace, i + 1)
+          try {
+            return JSON.parse(jsonStr)
+          } catch {
+            break
+          }
+        }
+      }
     }
   }
+
+  console.error('[Gekto] Failed to parse structured output')
+  console.error('[Gekto] Raw output (first 500 chars):', raw.slice(0, 500))
+  return null
 }
 
 // === Main Processing Function ===

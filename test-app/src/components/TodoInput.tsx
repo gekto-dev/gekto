@@ -1,17 +1,19 @@
 import { useState, type FormEvent } from 'react'
 
 interface TodoInputProps {
-  onAdd: (text: string) => void
+  onAdd: (text: string, dueDate?: string) => void
 }
 
 export function TodoInput({ onAdd }: TodoInputProps) {
   const [text, setText] = useState('')
+  const [dueDate, setDueDate] = useState('')
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     if (text.trim()) {
-      onAdd(text)
+      onAdd(text, dueDate || undefined)
       setText('')
+      setDueDate('')
     }
   }
 
@@ -31,6 +33,20 @@ export function TodoInput({ onAdd }: TodoInputProps) {
             border: '1px solid #333',
             borderRadius: 8,
             color: '#e0e0e0',
+            outline: 'none',
+          }}
+        />
+        <input
+          type="date"
+          value={dueDate}
+          onChange={e => setDueDate(e.target.value)}
+          style={{
+            padding: '12px 16px',
+            fontSize: 14,
+            background: '#1a1a1a',
+            border: '1px solid #333',
+            borderRadius: 8,
+            color: '#888',
             outline: 'none',
           }}
         />

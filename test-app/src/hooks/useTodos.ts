@@ -8,13 +8,14 @@ export function useTodos() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [sort, setSort] = useState<SortType>('newest')
 
-  const addTodo = (text: string) => {
+  const addTodo = (text: string, dueDate?: string) => {
     if (!text.trim()) return
     const newTodo: Todo = {
       id: crypto.randomUUID(),
       text: text.trim(),
       completed: false,
       createdAt: Date.now(),
+      dueDate,
     }
     setTodos(prev => [newTodo, ...prev])
   }
@@ -30,6 +31,16 @@ export function useTodos() {
   const deleteTodo = (id: string) => {
     setTodos(prev => prev.filter(todo => todo.id !== id))
   }
+
+  const clearCompleted = () => {
+    setTodos(prev => prev.filter(todo => !todo.completed))
+  }
+
+  const counts = useMemo(() => ({
+    total: todos.length,
+    active: todos.filter(t => !t.completed).length,
+    completed: todos.filter(t => t.completed).length,
+  }), [todos])
 
   const filteredTodos = useMemo(() => {
     let filtered: Todo[]
@@ -56,9 +67,11 @@ export function useTodos() {
     addTodo,
     toggleTodo,
     deleteTodo,
+    clearCompleted,
     filter,
     setFilter,
     sort,
     setSort,
+    counts,
   }
 }

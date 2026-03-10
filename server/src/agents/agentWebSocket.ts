@@ -178,6 +178,34 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             return
           }
 
+          // Clear all worker agents from canvas and state
+          case 'clear_all_agents': {
+            const state = getState()
+            // Kill all running agent processes
+            killAllSessions()
+            // Persist each worker agent as 'done' and remove from memory
+            const agentIds = Object.keys(state.agents).filter(id => id !== 'master' && !id.startsWith('master_'))
+            for (const agentId of agentIds) {
+              const agent = state.agents[agentId]
+              if (agent) {
+                persistEntity('agents', agentId, {
+                  ...agent,
+                  status: 'done',
+                  completedAt: new Date().toISOString(),
+                })
+              }
+              mutate(`agents.${agentId}`, undefined)
+              mutate(`visuals.${agentId}`, undefined)
+              broadcastAgent(agentId)
+              broadcastVisualDelete(agentId)
+            }
+            // Clear tasks and plan
+            mutate('tasks', {})
+            mutate('plan', null)
+            broadcastPlan()
+            return
+          }
+
           case 'create_plan': {
             // Set master lizard to working state
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'working' }))

@@ -341,3 +341,37 @@ export function getServerState(): GektoAppState {
 export function subscribeToServerState(listener: Listener): () => void {
   return subscribe(listener)
 }
+
+/**
+ * Update agent messages in client-side state directly (no server round-trip).
+ * Used by ChatWindow to keep master agent messages in sync so that
+ * unmount/remount cycles don't load stale snapshot data.
+ */
+export function updateLocalAgentMessages(agentId: string, messages: Message[]): void {
+  const agent = currentState.agents[agentId]
+  if (agent) {
+    currentState = {
+      ...currentState,
+      agents: {
+        ...currentState.agents,
+        [agentId]: { ...agent, messages },
+      },
+    }
+  } else {
+    currentState = {
+      ...currentState,
+      agents: {
+        ...currentState.agents,
+        [agentId]: {
+          id: agentId,
+          taskId: '',
+          personaId: 'plain',
+          status: 'idle' as AgentStatus,
+          messages,
+          createdAt: new Date().toISOString(),
+        },
+      },
+    }
+  }
+  emitChange()
+}

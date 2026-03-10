@@ -142,8 +142,7 @@ function buildStore(): GektoStore {
       sendWs({ type: 'delete_agent', agentId: id })
     },
     clearAllAgents: () => {
-      sendWs({ type: 'save_state', path: 'agents', value: {} })
-      sendWs({ type: 'save_state', path: 'visuals', value: {} })
+      sendWs({ type: 'clear_all_agents' })
     },
     addFileChange: (agentId, change) => {
       const agent = state.agents[agentId]

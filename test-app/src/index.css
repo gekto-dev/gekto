@@ -9,7 +9,7 @@ body {
   padding: 0;
   font-family: system-ui, -apple-system, sans-serif;
   min-height: 100vh;
-  background: #1a1a1a;
+  background: #0d0d0d;
   color: #e0e0e0;
 }
 
@@ -27,3 +27,120 @@ body {
   33% { transform: translate(3%, -2%) scale(1.05); }
   66% { transform: translate(-3%, 2%) scale(0.97); }
 }
+
+/* Layout Grid */
+.layout-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr 280px;
+  min-height: 100vh;
+  background: #0d0d0d;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-slot {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: 10;
+}
+
+.main-content {
+  position: relative;
+  overflow-y: auto;
+  min-height: 100vh;
+}
+
+.main-content-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 20px;
+}
+
+.right-panel-slot {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: 10;
+  background: #0d0d0d;
+}
+
+/* Sidebar */
+.sidebar {
+  background: #1a1a1a;
+  padding: 24px;
+  height: 100%;
+  border-right: 1px solid #2d2d2d;
+}
+
+.sidebar-section {
+  margin-bottom: 32px;
+}
+
+.sidebar-heading {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #666666;
+  margin: 0 0 12px 0;
+}
+
+.sidebar-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #aaaaaa;
+  font-size: 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.sidebar-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e0e0e0;
+}
+
+.sidebar-btn-active {
+  background: #4ade80;
+  color: #ffffff;
+}
+
+.sidebar-btn-active:hover {
+  background: #4ade80;
+  color: #ffffff;
+}
+
+.sidebar-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #2d2d2d;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23aaa' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+.sidebar-select:focus {
+  outline: none;
+  border-color: #4ade80;
+}
+

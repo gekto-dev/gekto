@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { useAgent, useAgentMessageListener, type Message } from '../context/AgentContext'
 import { useGekto } from '../context/GektoContext'
 import { useStore } from '../store/store'
-import { useServerState, getServerState } from '../hooks/useServerState'
+import { useServerState, getServerState, updateLocalAgentMessages } from '../hooks/useServerState'
 
 const MASTER_ID = 'master'
 const CHAT_SIZE_KEY = 'gekto-chat-size'
@@ -316,7 +316,13 @@ export function ChatWindow({
         messages: toSave,
       }))
     }
-  }, [messages, lizardId, historyLoaded, agent?.taskId])
+
+    // For master: also update client-side serverState so that unmount/remount
+    // cycles don't load stale snapshot data (save_chat doesn't broadcast for master)
+    if (isMaster && resolvedMasterId) {
+      updateLocalAgentMessages(resolvedMasterId, toSave as import('../hooks/useServerState').Message[])
+    }
+  }, [messages, lizardId, historyLoaded, agent?.taskId, isMaster, resolvedMasterId])
 
   // Auto-scroll to bottom on new messages or state changes (instant on initial load, smooth after)
   const hasScrolledInitially = useRef(false)
