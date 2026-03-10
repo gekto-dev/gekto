@@ -222,6 +222,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               let accThinking = ''
               let accText = ''
               let blockIndex = 0
+              // Unique nonce per request so streaming IDs don't collide when
+              // the same planId is reused (e.g. plan modifications)
+              const requestId = Date.now()
 
               // Streaming callbacks for tool events and text
               const planCallbacks: PlanCallbacks = {
@@ -252,6 +255,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   ws.send(JSON.stringify({
                     type: 'gekto_text',
                     planId: msg.planId,
+                    requestId,
                     text: accText,
                     blockIndex,
                   }))
@@ -261,6 +265,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   ws.send(JSON.stringify({
                     type: 'gekto_thinking',
                     planId: msg.planId,
+                    requestId,
                     text: accThinking,
                     blockIndex,
                   }))
@@ -289,6 +294,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               ws.send(JSON.stringify({
                 type: 'gekto_text',
                 planId: msg.planId,
+                requestId,
                 text: cleanMessage,
                 blockIndex,
               }))

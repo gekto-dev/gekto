@@ -497,13 +497,15 @@ export function GektoProvider({ children }: GektoProviderProps) {
         break
 
       case 'gekto_text':
-        // Server sends accumulated text per block — use blockIndex for unique IDs
+        // Server sends accumulated text per block — use requestId + blockIndex for unique IDs
+        // requestId ensures IDs don't collide across plan modification requests
         if (msg.text) {
           const textBlockIdx = (msg as Record<string, unknown>).blockIndex ?? 0
+          const textReqId = (msg as Record<string, unknown>).requestId ?? msg.planId
           const listener = (window as unknown as { __agentMessageListeners?: Map<string, (message: { id: string; text: string; sender: 'bot'; timestamp: Date; isStreaming?: boolean }) => void> }).__agentMessageListeners?.get('master')
           if (listener) {
             listener({
-              id: `gekto_streaming_${msg.planId}_${textBlockIdx}`,
+              id: `gekto_streaming_${textReqId}_${textBlockIdx}`,
               text: msg.text,
               sender: 'bot',
               timestamp: new Date(),
@@ -514,13 +516,14 @@ export function GektoProvider({ children }: GektoProviderProps) {
         break
 
       case 'gekto_thinking':
-        // Server sends accumulated thinking per block — use blockIndex for unique IDs
+        // Server sends accumulated thinking per block — use requestId + blockIndex for unique IDs
         if (msg.text) {
           const thinkBlockIdx = (msg as Record<string, unknown>).blockIndex ?? 0
+          const thinkReqId = (msg as Record<string, unknown>).requestId ?? msg.planId
           const listener = (window as unknown as { __agentMessageListeners?: Map<string, (message: { id: string; text: string; sender: 'bot'; timestamp: Date; isStreaming?: boolean; isThinking?: boolean }) => void> }).__agentMessageListeners?.get('master')
           if (listener) {
             listener({
-              id: `gekto_thinking_${msg.planId}_${thinkBlockIdx}`,
+              id: `gekto_thinking_${thinkReqId}_${thinkBlockIdx}`,
               text: msg.text,
               sender: 'bot',
               timestamp: new Date(),
