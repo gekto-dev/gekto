@@ -69,7 +69,7 @@ function CustomToolbar({ onAddTask, onAddIframe }: { onAddTask: () => void; onAd
 // Custom context menu — adds "Order elements" for frames
 function CustomContextMenu() {
   const editor = useEditor()
-  const selectedShapes = editor.getSelectedShapes()
+  const selectedShapes = useValue('selected shapes', () => editor.getSelectedShapes(), [editor])
   const hasFrame = selectedShapes.some(s => s.type === 'frame')
 
   return (

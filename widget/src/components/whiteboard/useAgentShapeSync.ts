@@ -9,6 +9,9 @@ import { orderFrameElements } from './orderFrameElements'
 const CARD_WIDTH = 300
 const CARD_HEIGHT = 200
 
+// Gap between shapes when resolving overlaps
+const PLACEMENT_GAP = 24
+
 // How long to keep deleted agent data for undo (30 seconds)
 const UNDO_BUFFER_TTL = 30_000
 
@@ -80,6 +83,70 @@ function buildShapeProps(agent: Agent, task: Task | undefined, index: number, cu
   props.fileChangeCount = fileChangeCount ?? 0
 
   return props
+}
+
+// ============ Collision Avoidance ============
+
+/**
+ * Find a non-overlapping position for a new shape, starting from the desired
+ * position and shifting right until it no longer intersects any existing shape.
+ * Only considers top-level shapes (not children of frames).
+ */
+function findNonOverlappingPosition(
+  editor: Editor,
+  desiredX: number,
+  desiredY: number,
+  width: number,
+  height: number,
+  excludeIds?: Set<TLShapeId>,
+): { x: number; y: number } {
+  // Collect bounding boxes of all existing top-level shapes on the current page
+  const pageShapes = editor.getCurrentPageShapes().filter(s => {
+    // Skip shapes inside frames (they're managed by orderFrameElements)
+    if (s.parentId !== editor.getCurrentPageId()) return false
+    // Skip shapes we're about to create
+    if (excludeIds?.has(s.id)) return false
+    return true
+  })
+
+  const existingBoxes = pageShapes
+    .map(s => editor.getShapePageBounds(s))
+    .filter((b): b is NonNullable<typeof b> => b !== null && b !== undefined)
+
+  let x = desiredX
+  const y = desiredY
+
+  // Keep shifting right until no overlap (max 50 iterations to avoid infinite loop)
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const cx = x
+    const cy = y
+    const cRight = cx + width
+    const cBottom = cy + height
+
+    let hasOverlap = false
+    let maxRight = x
+
+    for (const box of existingBoxes) {
+      if (
+        cx < box.maxX + PLACEMENT_GAP &&
+        cRight > box.x - PLACEMENT_GAP &&
+        cy < box.maxY + PLACEMENT_GAP &&
+        cBottom > box.y - PLACEMENT_GAP
+      ) {
+        hasOverlap = true
+        maxRight = Math.max(maxRight, box.maxX)
+      }
+    }
+
+    if (!hasOverlap) {
+      return { x, y }
+    }
+
+    // Jump to the right of the rightmost overlapping shape
+    x = maxRight + PLACEMENT_GAP
+  }
+
+  return { x, y }
 }
 
 // ============ Hook ============
@@ -197,18 +264,26 @@ export function useAgentShapeSync(
         // Re-arrange all children inside the frame
         orderFrameElements(editor, selectedFrame)
       } else if (newAgents.length === 1) {
-        // Single agent, no frame selected: place at viewport center
+        // Single agent, no frame selected: place at viewport center, avoiding overlaps
         const entry = newAgents[0]
         const idx = agentsWithTasks.indexOf(entry)
         const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
         const shapeId = createShapeId()
 
+        const { x, y } = findNonOverlappingPosition(
+          editor,
+          pageCenter.x - CARD_WIDTH / 2,
+          pageCenter.y - CARD_HEIGHT / 2,
+          CARD_WIDTH,
+          CARD_HEIGHT,
+        )
+
         try {
           editor.createShape({
             id: shapeId,
             type: 'task' as const,
-            x: pageCenter.x - CARD_WIDTH / 2,
-            y: pageCenter.y - CARD_HEIGHT / 2,
+            x,
+            y,
             props,
           } as any)
           agentToShape.set(entry.agent.id, shapeId)
@@ -226,11 +301,18 @@ export function useAgentShapeSync(
         const frameH = padding * 2 + rows * CARD_HEIGHT + (rows - 1) * gap + 32 // 32 for title bar
 
         const frameId = createShapeId()
+        const { x: frameX, y: frameY } = findNonOverlappingPosition(
+          editor,
+          pageCenter.x - frameW / 2,
+          pageCenter.y - frameH / 2,
+          frameW,
+          frameH,
+        )
         editor.createShape({
           id: frameId,
           type: 'frame',
-          x: pageCenter.x - frameW / 2,
-          y: pageCenter.y - frameH / 2,
+          x: frameX,
+          y: frameY,
           props: {
             w: frameW,
             h: frameH,
