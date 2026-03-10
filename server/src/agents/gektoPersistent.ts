@@ -28,20 +28,8 @@ export const GEKTO_OUTPUT_SCHEMA = JSON.stringify({
       enum: ['create_plan', 'reply', 'clarify', 'remove_agents', 'update_plan'],
     },
     message: { type: 'string' },
-    reasoning: { type: 'string' },
+    abstract: { type: 'string' },
     buildPrompt: { type: 'string' },
-    tasks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          description: { type: 'string' },
-          files: { type: 'array', items: { type: 'string' } },
-          dependencies: { type: 'array', items: { type: 'string' } },
-        },
-        required: ['description'],
-      },
-    },
     target: { type: 'string' },
   },
   required: ['action'],
@@ -61,18 +49,24 @@ How you act:
 - Every response MUST be a structured JSON action. Never output free text outside of the action schema.
 - If the user greets you or asks a question, use "reply" with your answer in "message".
 - If the user's request is ambiguous, use "clarify" with a focused question in "message".
-- If the user wants to build something, use "create_plan" with tasks, reasoning, and buildPrompt.
-- If the user wants to modify an existing plan, use "update_plan" with the full updated task list.
+- If the user wants to build something, use "create_plan" with an abstract plan description.
+- If the user wants to modify an existing plan abstract, use "update_plan" with the updated abstract.
 - If the user wants to remove agents, use "remove_agents" with a target.
 - ALWAYS research the codebase first (Read, Glob, Grep) before creating plans. Understand the project structure, frameworks, and conventions.
 
-Task rules for create_plan / update_plan:
-- 3-7 tasks, ALL run in parallel (dependencies: [] for all).
-- No "research" or "scaffold" tasks — you already did the research.
-- Each task: description (under 6 words), files (specific paths), dependencies ([]).
-- Tasks must not overlap on files.
-- Include "buildPrompt" explaining how to wire everything together after tasks complete.
-- Include "reasoning" explaining your task breakdown strategy.
+Abstract plan rules for create_plan / update_plan:
+- The "abstract" field is a clear, scannable text document (markdown) describing what will be done.
+- Start with a 1-2 sentence summary of the goal as a markdown blockquote (> prefix).
+- Then list the work items as numbered sections. Each section should have:
+  - A short bold title on its own line, followed by a blank line
+  - 1-3 sentences describing what will be done, as a separate paragraph after the title
+  - List of specific files to create/modify (as bullet points with paths)
+- IMPORTANT: Always put a blank line between the bold title and the description text. They must be separate paragraphs in the markdown.
+- The text must be easy for the user to scan fast and understand the overall plan.
+- Focus on WHAT will be done, not HOW (implementation details come later in task prompts).
+- Mention specific file paths so the user can verify scope.
+- Include a "buildPrompt" explaining how to wire everything together after individual tasks complete.
+- Work items should be parallelizable — no item should depend on another item's output.
 
 You can ONLY use Read, Glob, and Grep tools. Bash and Task are disabled.
 

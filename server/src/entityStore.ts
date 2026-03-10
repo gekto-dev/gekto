@@ -166,9 +166,9 @@ export function loadFromEntityStore(workingDir: string): GektoAppState | null {
       const p = readJson<ExecutionPlan>(path.join(getEntityDir('plans'), file))
       if (p) allPlans.push(p)
     }
-    // Prefer active plans (executing/ready/generating_prompts), then most recent by ID
+    // Prefer active plans (draft/executing/ready/generating_prompts), then most recent by ID
     const activePlan = allPlans.find(p =>
-      p.status === 'executing' || p.status === 'ready' || p.status === 'generating_prompts' || p.status === 'prompts_ready'
+      p.status === 'draft' || p.status === 'executing' || p.status === 'ready' || p.status === 'generating_prompts' || p.status === 'prompts_ready'
     )
     plan = activePlan || allPlans.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null
 

@@ -6,7 +6,7 @@ import { useServerState, type ExecutionPlan, type Task } from '../hooks/useServe
 
 // === Types ===
 
-type PlanStatus = 'planning' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
+type PlanStatus = 'planning' | 'draft' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
 type TaskStatus = 'pending' | 'in_progress' | 'pending_testing' | 'completed' | 'failed'
 
 type ExecutionStrategy = 'parallel-files' | 'sequential' | 'hybrid'
@@ -32,7 +32,7 @@ interface GektoContextValue {
 
   // Plan actions
   createPlan: (prompt: string, images?: string[]) => Promise<void>
-  generatePrompts: () => void
+  generateTasks: () => void
   executePlan: () => Promise<void>
   buildPlan: () => Promise<void>
   cancelPlan: () => void
@@ -110,8 +110,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
       return
     }
 
-    // If there's already a plan in ready state, we're modifying it
-    const isModifyingPlan = currentPlan?.status === 'ready'
+    // If there's already a plan in draft or ready state, we're modifying it
+    const isModifyingPlan = currentPlan?.status === 'draft' || currentPlan?.status === 'ready'
     const planId = isModifyingPlan ? currentPlan.id : `plan_test_${Date.now()}`
 
     // Include current agents so server knows what exists
@@ -127,37 +127,27 @@ export function GektoProvider({ children }: GektoProviderProps) {
       mode: directMode ? 'direct' : 'plan',
       lizards: currentAgents,
       existingPlan: isModifyingPlan ? {
-        tasks: planTasks.map(t => ({
-          id: t.id,
-          description: t.description,
-          prompt: t.prompt,
-          files: t.files,
-          dependencies: t.dependencies,
-        })),
-        reasoning: currentPlan.reasoning,
+        abstract: currentPlan.abstract,
       } : undefined,
     }
     if (images && images.length > 0) {
       payload.images = images
     }
     ws.send(JSON.stringify(payload))
-  }, [getWebSocket, storeAgents, directMode, currentPlan, planTasks])
+  }, [getWebSocket, storeAgents, directMode, currentPlan])
 
-  // Generate prompts for the current plan (Step 2 — parallel LLM calls)
-  const generatePrompts = useCallback(() => {
-    if (!currentPlan || currentPlan.status !== 'ready') return
+  // Generate tasks from plan abstract (converts abstract → structured tasks with prompts)
+  const generateTasks = useCallback(() => {
+    if (!currentPlan || currentPlan.status !== 'draft') return
 
     const ws = getWebSocket()
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
-    // Update plan status via server
-    send({ type: 'save_state', path: 'plan.status', value: 'generating_prompts' })
-
     ws.send(JSON.stringify({
-      type: 'generate_prompts',
+      type: 'generate_tasks',
       planId: currentPlan.id,
     }))
-  }, [getWebSocket, currentPlan, send])
+  }, [getWebSocket, currentPlan])
 
   // Use refs to always have the latest plan/tasks without stale closures
   const currentPlanRef = useRef(currentPlan)
@@ -481,6 +471,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     switch (msg.type) {
       case 'planning_started':
         // Set temporary planning state — panel will open when plan_created arrives
+        // Don't overwrite existing draft plans being modified
         if (!currentPlan || currentPlan.status === 'completed' || currentPlan.status === 'failed') {
           send({
             type: 'save_state',
@@ -493,6 +484,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
               createdAt: new Date().toISOString(),
             },
           })
+        } else if (currentPlan.status === 'draft') {
+          // Keep existing plan data, just mark as planning
+          send({ type: 'save_state', path: 'plan.status', value: 'planning' })
         }
         break
 
@@ -532,6 +526,30 @@ export function GektoProvider({ children }: GektoProviderProps) {
             })
           }
         }
+        break
+
+      case 'gekto_tool_start': {
+        const toolMsg = msg as unknown as Record<string, unknown>
+        const toolListener = (window as unknown as { __agentMessageListeners?: Map<string, (message: { id: string; text: string; sender: 'bot'; timestamp: Date; toolUse?: { tool: string; input?: string; status: string; startTime: Date } }) => void> }).__agentMessageListeners?.get('master')
+        if (toolListener && toolMsg.tool) {
+          toolListener({
+            id: `gekto_tool_${toolMsg.requestId}_${toolMsg.tool}_${Date.now()}`,
+            text: '',
+            sender: 'bot',
+            timestamp: new Date(),
+            toolUse: {
+              tool: toolMsg.tool as string,
+              input: toolMsg.input as string | undefined,
+              status: 'running',
+              startTime: new Date(),
+            },
+          })
+        }
+        break
+      }
+
+      case 'gekto_tool_end':
+        // Tool completion is visual-only — the next tool_start or text message provides context
         break
 
       case 'gekto_chat':
@@ -589,6 +607,11 @@ export function GektoProvider({ children }: GektoProviderProps) {
       case 'plan_created':
         // Plan data arrives via plan_set action in useServerState — just open the panel
         setIsPlanPanelOpen(true)
+        break
+
+      case 'tasks_generated':
+        // Tasks generated from abstract — plan panel will update automatically via server state
+        // Plan status already set to prompts_ready by server
         break
     }
   }, [currentPlan, send])
@@ -695,7 +718,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     directMode,
     setDirectMode,
     createPlan,
-    generatePrompts,
+    generateTasks,
     executePlan,
     buildPlan,
     cancelPlan,
@@ -715,7 +738,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     config,
     directMode,
     createPlan,
-    generatePrompts,
+    generateTasks,
     executePlan,
     buildPlan,
     cancelPlan,

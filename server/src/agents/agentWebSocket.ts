@@ -3,7 +3,7 @@ import type { Server } from 'http'
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
 import { sendMessage, resumeSession, resetSession, getWorkingDir, getActiveSessions, killSession, killAllSessions, attachWebSocket, revertFiles, saveImagesToTempFiles } from './agentPool.js'
-import { processWithTools, generateTaskPrompts, type PlanCallbacks, type PromptGenCallbacks } from './gektoTools.js'
+import { processWithTools, generateTasksFromAbstract, type PlanCallbacks, type TaskGenCallbacks } from './gektoTools.js'
 import type { ExecutionPlan, Task } from './types.js'
 import { randomUUID } from 'crypto'
 import { initGekto, getGektoState, abortGekto, setStateCallback, resetGektoSession, restoreGektoSession, getGektoSessionId } from './gektoPersistent.js'
@@ -372,7 +372,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             return
           }
 
-          case 'generate_prompts': {
+          case 'generate_tasks': {
             const currentState = getState()
             const genPlan = currentState.plan
             if (!genPlan || genPlan.id !== msg.planId) {
@@ -380,57 +380,68 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               return
             }
 
-            // Resolve tasks from state
-            const planTasks = genPlan.taskIds
-              .map(id => currentState.tasks[id])
-              .filter((t): t is Task => !!t)
-
             // Set master to working while generating
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'working' }))
 
+            // Update plan status
+            mutate('plan.status', 'generating_prompts')
+            broadcastPlan()
+
             try {
-              const genCallbacks: PromptGenCallbacks = {
-                onTaskPromptGenerated: (taskId, prompt) => {
-                  // Update task prompt in server state
-                  mutate(`tasks.${taskId}.prompt`, prompt)
-                  broadcastTask(taskId)
-                  // Notify client
-                  ws.send(JSON.stringify({
-                    type: 'prompt_generated',
-                    planId: msg.planId,
-                    taskId,
-                    prompt,
-                  }))
+              const requestId = Date.now()
+              const genCallbacks: TaskGenCallbacks = {
+                onToolStart: (tool, input) => {
+                  ws.send(JSON.stringify({ type: 'gekto_tool_start', planId: msg.planId, requestId, tool, input: input ? JSON.stringify(input).slice(0, 200) : undefined }))
                 },
-                onAllPromptsReady: () => {
-                  mutate('plan.status', 'prompts_ready')
+                onToolEnd: (tool) => {
+                  ws.send(JSON.stringify({ type: 'gekto_tool_end', planId: msg.planId, requestId, tool }))
+                },
+                onThinking: (text) => {
+                  ws.send(JSON.stringify({ type: 'gekto_thinking', planId: msg.planId, requestId, text }))
+                },
+                onTasksGenerated: (tasks) => {
+                  // Store all tasks and update plan
+                  const mutations: Array<{ path: string; value: unknown }> = []
+                  for (const task of tasks) {
+                    mutations.push({ path: `tasks.${task.id}`, value: task })
+                  }
+                  mutations.push({ path: 'plan.taskIds', value: tasks.map(t => t.id) })
+                  mutations.push({ path: 'plan.status', value: 'prompts_ready' })
+                  mutateBatch(mutations)
+
                   broadcastPlan()
+                  for (const task of tasks) {
+                    broadcastTask(task.id)
+                  }
+
                   ws.send(JSON.stringify({
-                    type: 'prompts_ready',
+                    type: 'tasks_generated',
                     planId: msg.planId,
+                    taskCount: tasks.length,
                   }))
                 },
-                onError: (taskId, error) => {
-                  const state = getState()
-                  const fallback = state.tasks[taskId]?.description || 'Execute task'
+                onError: (error) => {
                   ws.send(JSON.stringify({
-                    type: 'prompt_generated',
+                    type: 'gekto_chat',
                     planId: msg.planId,
-                    taskId,
-                    prompt: fallback,
-                    error,
+                    message: `Error generating tasks: ${error}`,
                   }))
+                  // Revert plan status to draft
+                  mutate('plan.status', 'draft')
+                  broadcastPlan()
                 },
               }
 
-              await generateTaskPrompts(genPlan, planTasks, getWorkingDir(), genCallbacks)
+              await generateTasksFromAbstract(genPlan, getWorkingDir(), genCallbacks)
             } catch (err) {
-              console.error('[Agent] Prompt generation failed:', err)
+              console.error('[Agent] Task generation failed:', err)
               ws.send(JSON.stringify({
                 type: 'gekto_chat',
                 planId: msg.planId,
-                message: `Error generating prompts: ${err instanceof Error ? err.message : 'Failed'}`,
+                message: `Error generating tasks: ${err instanceof Error ? err.message : 'Failed'}`,
               }))
+              mutate('plan.status', 'draft')
+              broadcastPlan()
             }
 
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'ready' }))

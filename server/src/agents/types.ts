@@ -65,12 +65,13 @@ export interface Task {
   sessionId?: string
 }
 
-export type ExecutionPlanStatus = 'planning' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
+export type ExecutionPlanStatus = 'planning' | 'draft' | 'ready' | 'generating_prompts' | 'prompts_ready' | 'executing' | 'completed' | 'failed'
 
 export interface ExecutionPlan {
   id: string
   status: ExecutionPlanStatus
   originalPrompt: string
+  abstract?: string
   reasoning?: string
   buildPrompt?: string
   taskIds: string[]

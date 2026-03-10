@@ -324,14 +324,27 @@ export function ChatWindow({
     }
   }, [messages, lizardId, historyLoaded, agent?.taskId, isMaster, resolvedMasterId])
 
-  // Auto-scroll to bottom on new messages or state changes (instant on initial load, smooth after)
-  const hasScrolledInitially = useRef(false)
+  // Auto-scroll to bottom on new messages or state changes
+  const chatMessagesRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!historyLoaded) return
-    const behavior = hasScrolledInitially.current ? 'smooth' : 'instant'
-    messagesEndRef.current?.scrollIntoView({ behavior })
-    hasScrolledInitially.current = true
+    const el = chatMessagesRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages, historyLoaded, agentState])
+
+  // Scroll to bottom when chat becomes visible (display: none → block)
+  useEffect(() => {
+    const el = chatMessagesRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (el.clientHeight > 0) {
+        el.scrollTop = el.scrollHeight
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // Resize handlers
   const handleResizeStart = (direction: ResizeDirection) => (e: React.MouseEvent) => {
@@ -958,6 +971,7 @@ export function ChatWindow({
 
       {/* Messages */}
       <div
+        ref={chatMessagesRef}
         className="chat-messages flex-1 p-4 space-y-3"
         style={{ minHeight: 0, overflowY: 'auto' }}
       >
@@ -1251,6 +1265,18 @@ export function ChatWindow({
               <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
               <span className="tool-call-text font-mono text-xs">
                 {isMaster ? THINKING_PHRASES[masterPhraseIndex] : AGENT_PHRASES[agentPhraseIndex]}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Plan generation loader */}
+        {isMaster && currentPlan && (currentPlan.status === 'planning' || currentPlan.status === 'generating_prompts') && agentState !== 'working' && (
+          <div className="flex justify-start">
+            <div className="flex items-center gap-2 py-1">
+              <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+              <span className="tool-call-text font-mono text-xs">
+                {currentPlan.status === 'planning' ? 'Writing plan abstract' : 'Generating tasks'}
               </span>
             </div>
           </div>

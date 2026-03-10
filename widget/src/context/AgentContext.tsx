@@ -420,9 +420,12 @@ export function AgentProvider({ children }: AgentProviderProps) {
         case 'gekto_chat':
         case 'gekto_text':
         case 'gekto_thinking':
+        case 'gekto_tool_start':
+        case 'gekto_tool_end':
         case 'gekto_done':
         case 'gekto_remove':
         case 'planning_started':
+        case 'tasks_generated':
         case 'session_restored': {
           const gektoHandler = (window as unknown as { __gektoMessageHandler?: (msg: unknown) => void }).__gektoMessageHandler
           if (gektoHandler) {

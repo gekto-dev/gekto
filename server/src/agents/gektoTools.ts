@@ -6,16 +6,28 @@ import type { Task, ExecutionPlan, GektoToolResult } from './types.js'
 // Re-export types for backward compatibility
 export type { Task, ExecutionPlan, GektoToolResult } from './types.js'
 
-// Step 2: Generate a detailed prompt for a single task (runs in parallel for each task)
-const PROMPT_GEN_SYSTEM = `You are a senior engineer writing a detailed task prompt for a coding agent.
-Given a task description and project context, write a clear, actionable prompt (100-300 words) that tells the agent:
-- Specific files to create/modify
-- Implementation approach
-- Edge cases to handle
-- What "done" looks like
-- MUST include: "Do NOT import from files created by other tasks"
+// System prompt for generating structured tasks from a plan abstract
+const TASK_GEN_SYSTEM = `You are a senior engineer breaking a plan abstract into concrete coding tasks.
+Given a plan abstract and project context, output a JSON array of tasks.
 
-Output ONLY the prompt text, nothing else. No JSON, no markdown wrapping.`
+Each task object must have:
+- "name": short title (under 6 words)
+- "description": what this task does (1-2 sentences)
+- "files": array of specific file paths to create/modify
+- "prompt": detailed agent prompt (100-300 words) telling the agent:
+  - Specific files to create/modify
+  - Implementation approach
+  - Edge cases to handle
+  - What "done" looks like
+  - MUST include: "Do NOT import from files created by other tasks"
+
+Rules:
+- 3-7 tasks, ALL run in parallel (no dependencies between them)
+- Tasks must not overlap on files
+- No "research" or "scaffold" tasks
+- Each task must be self-contained
+
+Output ONLY a valid JSON array of task objects, nothing else. No markdown wrapping.`
 
 // === Callbacks for streaming events ===
 
@@ -28,7 +40,8 @@ export interface PlanCallbacks {
 
 // Existing plan context for modifications
 interface ExistingPlanContext {
-  tasks: { id: string; description: string; prompt: string; files: string[]; dependencies: string[] }[]
+  abstract?: string
+  tasks?: { id: string; description: string; prompt: string; files: string[]; dependencies: string[] }[]
   reasoning?: string
 }
 
@@ -37,9 +50,8 @@ interface ExistingPlanContext {
 interface GektoStructuredOutput {
   action: 'create_plan' | 'reply' | 'clarify' | 'remove_agents' | 'update_plan'
   message?: string
-  reasoning?: string
+  abstract?: string
   buildPrompt?: string
-  tasks?: Partial<Task>[]
   target?: string
 }
 
@@ -122,23 +134,12 @@ export async function processWithTools(
   }
 
   // Add existing plan context for modifications
-  if (existingPlan && existingPlan.tasks.length > 0) {
-    const taskList = existingPlan.tasks.map((t, i) =>
-      `  ${i + 1}. ${t.description} (files: ${t.files.join(', ') || 'none'})`
-    ).join('\n')
+  if (existingPlan?.abstract) {
+    contextPrompt += `\n\n[EXISTING PLAN ABSTRACT - User wants to modify this plan:
 
-    contextPrompt += `\n\n[EXISTING PLAN - User wants to modify this plan:
-Reasoning: ${existingPlan.reasoning || 'Not provided'}
-Tasks:
-${taskList}
+${existingPlan.abstract}
 
-The user's message above is a modification request. You can:
-- Add new tasks to the existing ones
-- Remove specific tasks
-- Modify task descriptions or prompts
-- Respond with clarify if you need clarification
-
-If modifying, use update_plan with ALL tasks (existing + changes).]`
+The user's message above is a modification request. Respond with "update_plan" and the FULL updated abstract (not just the changes). Keep the same structure and style.]`
   }
 
   // Append image file paths to prompt so Gekto can reference them
@@ -167,12 +168,21 @@ If modifying, use update_plan with ALL tasks (existing + changes).]`
   switch (parsed.action) {
     case 'create_plan':
     case 'update_plan': {
-      const result = createPlanFromTasks(parsed.tasks || [], planId, prompt, parsed.reasoning, parsed.buildPrompt)
+      // Create a draft plan with abstract — tasks are generated later
+      const plan: ExecutionPlan = {
+        id: planId,
+        status: 'draft',
+        originalPrompt: prompt,
+        abstract: parsed.abstract || parsed.message || '',
+        buildPrompt: parsed.buildPrompt,
+        taskIds: [],
+        createdAt: new Date().toISOString(),
+      }
       return {
         type: 'build',
-        plan: result.plan,
-        tasks: result.tasks,
-        message: parsed.message || parsed.reasoning,
+        plan,
+        tasks: [],
+        message: parsed.message || parsed.abstract?.split('\n')[0] || 'Plan created.',
       }
     }
 
@@ -195,62 +205,6 @@ If modifying, use update_plan with ALL tasks (existing + changes).]`
 }
 
 // === Helper Functions ===
-
-interface CreatePlanResult {
-  plan: ExecutionPlan
-  tasks: Task[]
-}
-
-function createPlanFromTasks(
-  tasks: Partial<Task>[],
-  planId: string,
-  originalPrompt: string,
-  reasoning?: string,
-  buildPrompt?: string
-): CreatePlanResult {
-  // Extract taskId from planId (planId format: "plan_test_123456")
-  // taskId should be "test_123456" for task IDs like "test_123456_1"
-  const taskId = planId.replace(/^plan_/, '')
-
-  // Use same format as hardcoded Test button: test_X_1, test_X_2, etc.
-  const parsedTasks: Task[] = tasks.map((t, i) => ({
-    id: `${taskId}_${i + 1}`,
-    name: (t.description || 'Task').slice(0, 50),
-    description: t.description || 'Task',
-    prompt: '',  // Prompts are generated in a separate parallel step
-    files: (t.files || []).filter(f => f && String(f).trim()),
-    status: 'pending' as const,
-    dependencies: t.dependencies || [],
-    planId,
-  }))
-
-  // Fallback to single task if empty
-  if (parsedTasks.length === 0) {
-    parsedTasks.push({
-      id: `${taskId}_1`,
-      name: 'Execute task',
-      description: 'Execute task',
-      prompt: originalPrompt,
-      files: [],
-      status: 'pending',
-      dependencies: [],
-      planId,
-    })
-  }
-
-  return {
-    plan: {
-      id: planId,
-      status: 'ready',
-      originalPrompt,
-      reasoning,
-      buildPrompt,
-      taskIds: parsedTasks.map(t => t.id),
-      createdAt: new Date().toISOString(),
-    },
-    tasks: parsedTasks,
-  }
-}
 
 function resolveRemoveTarget(
   target: string | string[],
@@ -280,58 +234,123 @@ function resolveRemoveTarget(
   }
 }
 
-// === Parallel Prompt Generation ===
+// === JSON Array Parser (robust) ===
 
-export interface PromptGenCallbacks {
-  onTaskPromptGenerated?: (taskId: string, prompt: string) => void
-  onAllPromptsReady?: () => void
-  onError?: (taskId: string, error: string) => void
+function parseJsonArray(raw: string): Array<{ name?: string; description?: string; files?: string[]; prompt?: string }> {
+  // Try direct parse
+  try {
+    const parsed = JSON.parse(raw.trim())
+    if (Array.isArray(parsed)) return parsed
+  } catch { /* noop */ }
+
+  // Strip markdown fences
+  const stripped = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '')
+  try {
+    const parsed = JSON.parse(stripped)
+    if (Array.isArray(parsed)) return parsed
+  } catch { /* noop */ }
+
+  // Extract first JSON array from surrounding text
+  const firstBracket = raw.indexOf('[')
+  if (firstBracket >= 0) {
+    let depth = 0
+    let inString = false
+    let escape = false
+    for (let i = firstBracket; i < raw.length; i++) {
+      const ch = raw[i]
+      if (escape) { escape = false; continue }
+      if (ch === '\\' && inString) { escape = true; continue }
+      if (ch === '"') { inString = !inString; continue }
+      if (inString) continue
+      if (ch === '[') depth++
+      else if (ch === ']') {
+        depth--
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(raw.slice(firstBracket, i + 1))
+            if (Array.isArray(parsed)) return parsed
+          } catch { break }
+        }
+      }
+    }
+  }
+
+  console.error('[Gekto] Failed to parse task array from output')
+  console.error('[Gekto] Raw (first 500 chars):', raw.slice(0, 500))
+  throw new Error(`Unexpected token '${raw[0]}', "${raw.slice(0, 20)}"... is not valid JSON`)
 }
 
-export async function generateTaskPrompts(
+// === Task Generation from Abstract ===
+
+export interface TaskGenCallbacks {
+  onTasksGenerated?: (tasks: Task[]) => void
+  onError?: (error: string) => void
+  onToolStart?: (tool: string, input?: Record<string, unknown>) => void
+  onToolEnd?: (tool: string) => void
+  onText?: (text: string) => void
+  onThinking?: (text: string) => void
+}
+
+export async function generateTasksFromAbstract(
   plan: ExecutionPlan,
-  tasks: Task[],
   workingDir: string,
-  callbacks?: PromptGenCallbacks,
-): Promise<Map<string, string>> {
-  // Build shared context about the plan
-  const planContext = [
+  callbacks?: TaskGenCallbacks,
+): Promise<Task[]> {
+  const taskIdBase = plan.id.replace(/^plan_/, '')
+
+  const userPrompt = [
     `Project goal: ${plan.originalPrompt}`,
-    `Plan reasoning: ${plan.reasoning || 'N/A'}`,
     '',
-    'All tasks in the plan:',
-    ...tasks.map((t, i) => `  ${i + 1}. ${t.description} (files: ${t.files.join(', ') || 'read-only'})`),
+    `Plan abstract:`,
+    plan.abstract || '',
     '',
     plan.buildPrompt ? `Build step (runs after all tasks): ${plan.buildPrompt}` : '',
   ].filter(Boolean).join('\n')
 
-  // Generate prompts in parallel
-  const promptPromises = tasks.map(async (task) => {
-    const userPrompt = [
-      planContext,
-      '',
-      `--- YOUR TASK ---`,
-      `Description: ${task.description}`,
-      `Files to create/modify: ${task.files.join(', ') || 'none (read-only research task)'}`,
-      `Dependencies: ${task.dependencies.join(', ') || 'none'}`,
-    ].join('\n')
-
-    try {
-      const prompt = await runClaudeOnce(userPrompt, PROMPT_GEN_SYSTEM, workingDir)
-      callbacks?.onTaskPromptGenerated?.(task.id, prompt.trim())
-      return { taskId: task.id, prompt: prompt.trim() }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to generate prompt'
-      callbacks?.onError?.(task.id, errorMsg)
-      // Fallback: use description as prompt
-      return { taskId: task.id, prompt: task.description }
+  try {
+    const streamCallbacks: PlanCallbacks = {
+      onToolStart: callbacks?.onToolStart,
+      onToolEnd: callbacks?.onToolEnd,
+      onText: callbacks?.onText,
+      onThinking: callbacks?.onThinking,
     }
-  })
+    const result = await runClaudeOnce(userPrompt, TASK_GEN_SYSTEM, workingDir, streamCallbacks)
 
-  const results = await Promise.all(promptPromises)
+    // Parse JSON array of tasks — robust extraction
+    const rawTasks = parseJsonArray(result)
 
-  callbacks?.onAllPromptsReady?.()
-  return new Map(results.map(r => [r.taskId, r.prompt]))
+    if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
+      throw new Error('No tasks generated')
+    }
+
+    const tasks: Task[] = rawTasks.map((t, i) => ({
+      id: `${taskIdBase}_${i + 1}`,
+      name: (t.name || t.description || 'Task').slice(0, 50),
+      description: t.description || t.name || 'Task',
+      prompt: t.prompt || t.description || '',
+      files: (t.files || []).filter((f: string) => f && String(f).trim()),
+      status: 'pending' as const,
+      dependencies: [],
+      planId: plan.id,
+    }))
+
+    callbacks?.onTasksGenerated?.(tasks)
+    return tasks
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to generate tasks'
+    callbacks?.onError?.(errorMsg)
+    // Fallback: single task from abstract
+    return [{
+      id: `${taskIdBase}_1`,
+      name: 'Execute plan',
+      description: plan.abstract || plan.originalPrompt,
+      prompt: plan.abstract || plan.originalPrompt,
+      files: [],
+      status: 'pending' as const,
+      dependencies: [],
+      planId: plan.id,
+    }]
+  }
 }
 
 // === Claude Helper ===
@@ -347,7 +366,7 @@ function runClaudeOnce(
       '-p', prompt,
       '--output-format', 'stream-json',
       '--verbose',
-      '--model', 'claude-opus-4-5-20251101',
+      '--model', 'claude-sonnet-4-6',
       '--system-prompt', systemPrompt,
       '--dangerously-skip-permissions',
       '--disallowed-tools', 'Task', 'Edit', 'Write', 'Bash',
@@ -358,7 +377,7 @@ function runClaudeOnce(
     // would conflict with it and cause exit code 1.
 
     const startTime = Date.now()
-    console.log(`[Gekto] Spawning: "${CLAUDE_PATH}" (model: claude-sonnet-4-6)`)
+    console.log(`[Gekto] Spawning: "${CLAUDE_PATH}" (model: claude-sonnet-4-6, task gen)`)
     console.log(`[Gekto] CWD: ${workingDir}`)
 
     const proc = spawn(CLAUDE_PATH, args, {

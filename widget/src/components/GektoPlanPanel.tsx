@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { ChatBubbleIcon, ChevronDownIcon, ChevronUpIcon } from '@radix-ui/react-icons'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useGekto, usePlanTasks, type Task } from '../context/GektoContext'
 import { useAgent } from '../context/AgentContext'
 
@@ -194,17 +196,41 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
 
 export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProps) {
   const [modalPrompt, setModalPrompt] = useState<Task | null>(null)
-  const { currentPlan, generatePrompts, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, removeTask } = useGekto()
+  const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, removeTask } = useGekto()
   const tasks = usePlanTasks()
   const { killAgent } = useAgent()
+
+  // Collapsible sections — abstract open by default in draft, tasks open when generated
+  const hasTasks = tasks.length > 0
+  const isDraft = currentPlan?.status === 'draft'
+  const isGeneratingTasks = currentPlan?.status === 'generating_prompts'
+  const isPlanning = currentPlan?.status === 'planning'
+  const [abstractOpen, setAbstractOpen] = useState(true)
+  const [tasksOpen, setTasksOpen] = useState(false)
+
+  // Auto-toggle sections when tasks are generated
+  const prevHasTasks = useRef(hasTasks)
+  if (hasTasks && !prevHasTasks.current) {
+    // Tasks just appeared — collapse abstract, expand tasks
+    setAbstractOpen(false)
+    setTasksOpen(true)
+  }
+  prevHasTasks.current = hasTasks
+
+  // Fold abstract when generating tasks starts
+  const prevGenerating = useRef(isGeneratingTasks)
+  if (isGeneratingTasks && !prevGenerating.current) {
+    setAbstractOpen(false)
+    setTasksOpen(true)
+  }
+  prevGenerating.current = isGeneratingTasks
+
   if (!currentPlan) return null
 
   const completedCount = tasks.filter(t => t.status === 'completed').length
   const pendingTestingCount = tasks.filter(t => t.status === 'pending_testing').length
-  const promptsGeneratedCount = tasks.filter(t => t.prompt && t.prompt.length > 0).length
   const totalCount = tasks.length
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0
-  const promptProgress = totalCount > 0 ? (promptsGeneratedCount / totalCount) * 100 : 0
 
   // Show Build button when all tasks are done (pending_testing or completed), and buildPrompt exists
   const allTasksDone = totalCount > 0 && tasks.every(t => t.status === 'completed' || t.status === 'pending_testing')
@@ -222,7 +248,7 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
         left: position.x,
         top: position.y,
         zIndex: 1003,
-        width: 400,
+        width: 520,
         height: height || 500,
         pointerEvents: 'auto',
       }}
@@ -241,8 +267,11 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           className="flex items-center justify-between px-4 py-3"
           style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}
         >
-          <div className="flex items-center gap-2">
-            <span className="text-white font-medium text-sm">Execution Plan</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-white font-medium text-sm">Plan</span>
+            {isDraft && (
+              <span className="text-xs text-white/40">Draft</span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {showBuildButton && (
@@ -267,50 +296,63 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           </div>
         </div>
 
+        {/* Scrollable content */}
+        <div className="flex-1 p-3 space-y-2 overflow-y-auto min-h-0">
 
-        {/* Scrollable content: reasoning + progress + tasks */}
-        <div
-          className="flex-1 p-3 space-y-2 overflow-y-auto min-h-0"
-        >
-          {/* Gekto's reasoning */}
-          {currentPlan.reasoning && (
-            <div
-              className="px-3 py-2.5 text-xs rounded"
-              style={{
-                background: 'rgba(191, 255, 107, 0.05)',
-                border: '1px solid rgba(191, 255, 107, 0.1)',
-              }}
-            >
-              <div className="flex items-start gap-2">
-                <span className="text-[#BFFF6B]">💡</span>
-                <span className="text-white/70">{currentPlan.reasoning}</span>
+          {/* Planning spinner */}
+          {currentPlan.status === 'planning' && (
+            <div className="flex items-center justify-center py-8">
+              <div className="text-white/60 text-sm">
+                <span className="inline-flex gap-1">
+                  <span className="animate-bounce">.</span>
+                  <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
+                  <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
+                </span>
+                <span className="ml-2">Analyzing and writing plan</span>
               </div>
             </div>
           )}
 
-          {/* Prompt generation progress bar */}
-          {currentPlan.status === 'generating_prompts' && (
-            <div className="px-1 py-1">
-              <div className="flex items-center gap-2 text-xs text-white/60 mb-1">
-                <span>Generating prompts</span>
-                <span>{promptsGeneratedCount}/{totalCount}</span>
-              </div>
-              <div
-                className="h-1 rounded-full overflow-hidden"
-                style={{ background: 'rgba(255, 255, 255, 0.1)' }}
+          {/* Abstract section — collapsible accordion */}
+          {currentPlan.abstract && (
+            <div className={isPlanning ? 'section-updating' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <button
+                onClick={() => setAbstractOpen(!abstractOpen)}
+                className="flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold text-white/70 hover:text-white transition-colors"
               >
-                <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{
-                    width: `${promptProgress}%`,
-                    background: 'linear-gradient(90deg, #22c55e, #4ade80)',
-                  }}
-                />
-              </div>
+                <span>Abstract</span>
+                {abstractOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />}
+              </button>
+              {abstractOpen && (
+                <div className="px-1 pb-3 text-sm plan-abstract">
+                  <Markdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      p: ({ children }) => <p className="text-white/70 leading-relaxed mb-3 last:mb-0">{children}</p>,
+                      strong: ({ children }) => <strong className="text-white/90 font-semibold block mb-1">{children}</strong>,
+                      ul: ({ children }) => <ul className="text-white/60 list-disc pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ul>,
+                      ol: ({ children }) => <ol className="text-white/60 list-decimal pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ol>,
+                      li: ({ children }) => <li className="text-white/60 leading-relaxed">{children}</li>,
+                      code: ({ children }) => {
+                        const text = typeof children === 'string' ? children : String(children ?? '')
+                        const isPath = text.includes('/') && !text.includes(' ')
+                        const display = isPath ? text.split('/').slice(-2).join('/') : text
+                        return <code className="text-[#BFFF6B] text-xs px-1 py-0.5 rounded" title={isPath ? text : undefined} style={{ background: 'rgba(255,255,255,0.06)' }}>{display}</code>
+                      },
+                      blockquote: ({ children }) => <blockquote className="mb-4 pl-3 text-white/60" style={{ borderLeft: '3px solid rgba(255, 255, 255, 0.2)' }}>{children}</blockquote>,
+                      h1: ({ children }) => <h2 className="text-white font-semibold text-base mb-2">{children}</h2>,
+                      h2: ({ children }) => <h3 className="text-white font-semibold text-sm mb-2">{children}</h3>,
+                      h3: ({ children }) => <h4 className="text-white/90 font-medium text-sm mb-1">{children}</h4>,
+                    }}
+                  >
+                    {currentPlan.abstract}
+                  </Markdown>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Progress bar */}
+          {/* Execution progress bar */}
           {currentPlan.status === 'executing' && (
             <div className="px-1 py-1">
               <div className="flex items-center gap-2 text-xs text-white/60 mb-1">
@@ -334,48 +376,56 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
               </div>
             </div>
           )}
-          {currentPlan.status === 'planning' ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="text-white/60 text-sm">
-                <span className="inline-flex gap-1">
-                  <span className="animate-bounce">.</span>
-                  <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
-                  <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
-                </span>
-                <span className="ml-2">Analyzing task and creating plan</span>
-              </div>
+
+          {/* Tasks section — collapsible accordion */}
+            <div className={isGeneratingTasks ? 'section-updating' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <button
+                onClick={() => (hasTasks || isGeneratingTasks) && setTasksOpen(!tasksOpen)}
+                className={`flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold transition-colors ${hasTasks || isGeneratingTasks ? 'text-white/70 hover:text-white cursor-pointer' : 'text-white/30 cursor-default'}`}
+              >
+                <span>Tasks {totalCount > 0 && <span className="text-white/40 font-normal">{totalCount}</span>}</span>
+                {(hasTasks || isGeneratingTasks) && (tasksOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />)}
+              </button>
+              {tasksOpen && (hasTasks || isGeneratingTasks) && (
+                <div className="space-y-2 pb-3">
+                  {isGeneratingTasks && !hasTasks && (
+                    <div className="flex items-center gap-2 px-1 py-2 text-xs text-white/50">
+                      <span className="inline-flex gap-0.5">
+                        <span className="animate-bounce">.</span>
+                        <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
+                        <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
+                      </span>
+                      <span>Generating tasks from abstract</span>
+                    </div>
+                  )}
+                  {tasks.map(task => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      onMarkResolved={markTaskResolved}
+                      onRun={runTask}
+                      onStop={(taskId) => {
+                        const t = tasks.find(t => t.id === taskId)
+                        if (t?.assignedAgentId) killAgent(t.assignedAgentId)
+                      }}
+                      onRemove={removeTask}
+                      onShowPrompt={setModalPrompt}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          ) : tasks.length === 0 ? (
-            <div className="text-white/40 text-sm text-center py-4">
-              No tasks in plan
-            </div>
-          ) : (
-            tasks.map(task => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                onMarkResolved={markTaskResolved}
-                onRun={runTask}
-                onStop={(taskId) => {
-                  const t = tasks.find(t => t.id === taskId)
-                  if (t?.assignedAgentId) killAgent(t.assignedAgentId)
-                }}
-                onRemove={removeTask}
-                onShowPrompt={setModalPrompt}
-              />
-            ))
-          )}
         </div>
-        
+
         {/* Actions */}
         <div
           className="flex gap-2 p-3"
           style={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}
         >
-          {currentPlan.status === 'ready' && (
+          {currentPlan.status === 'draft' && (
             <>
               <button
-                onClick={() => generatePrompts()}
+                onClick={() => generateTasks()}
                 className="flex-1 px-4 py-2 text-sm font-medium transition-colors rounded"
                 style={{
                   background: 'linear-gradient(to right bottom, rgba(34, 197, 94, 0.15), rgba(74, 222, 128, 0.35))',
@@ -383,7 +433,7 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                   border: '1px solid rgba(34, 197, 94, 0.2)',
                 }}
               >
-                Generate Prompts
+                Generate Tasks
               </button>
               <button
                 onClick={cancelPlan}
@@ -434,7 +484,7 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                 border: '1px solid rgba(34, 197, 94, 0.2)',
               }}
             >
-              Generating Prompts ({promptsGeneratedCount}/{totalCount})
+              Generating Tasks...
             </button>
           )}
           {currentPlan.status === 'executing' && (
