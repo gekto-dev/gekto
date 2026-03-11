@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { ChatBubbleIcon, ChevronDownIcon, ChevronUpIcon } from '@radix-ui/react-icons'
+import { ListBulletIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useGekto, usePlanTasks, type Task } from '../context/GektoContext'
@@ -133,7 +133,7 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
                 border: '1px solid rgba(255, 255, 255, 0.1)',
               }}
             >
-              <ChatBubbleIcon width={12} height={12} />
+              <ListBulletIcon width={12} height={12} />
               <span>Agent Prompt</span>
             </button>
           ) : (
@@ -147,7 +147,7 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
               }}
               title="View agent prompt"
             >
-              <ChatBubbleIcon width={12} height={12} />
+              <ListBulletIcon width={12} height={12} />
             </button>
           )}
           {task.status === 'pending_testing' && !isRemoving && (
@@ -181,28 +181,22 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   const tasks = usePlanTasks()
   const { killAgent } = useAgent()
 
-  // Collapsible sections — abstract open by default in draft, tasks open when generated
   const hasTasks = tasks.length > 0
   const isDraft = currentPlan?.status === 'draft'
   const isGeneratingTasks = currentPlan?.status === 'generating_prompts'
   const isPlanning = currentPlan?.status === 'planning'
-  const [abstractOpen, setAbstractOpen] = useState(true)
-  const [tasksOpen, setTasksOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'abstract' | 'tasks'>('abstract')
 
-  // Auto-toggle sections when tasks are generated
+  // Auto-switch to tasks tab when tasks appear or generation starts
   const prevHasTasks = useRef(hasTasks)
   if (hasTasks && !prevHasTasks.current) {
-    // Tasks just appeared — collapse abstract, expand tasks
-    setAbstractOpen(false)
-    setTasksOpen(true)
+    setActiveTab('tasks')
   }
   prevHasTasks.current = hasTasks
 
-  // Fold abstract when generating tasks starts
   const prevGenerating = useRef(isGeneratingTasks)
   if (isGeneratingTasks && !prevGenerating.current) {
-    setAbstractOpen(false)
-    setTasksOpen(true)
+    setActiveTab('tasks')
   }
   prevGenerating.current = isGeneratingTasks
 
@@ -277,31 +271,54 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           </div>
         </div>
 
-        {/* Scrollable content */}
-        <div className="flex-1 p-3 space-y-2 overflow-y-auto min-h-0">
+        {/* Tab bar */}
+        <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+          <button
+            onClick={() => setActiveTab('abstract')}
+            className="px-3 py-1 text-xs font-medium rounded-full transition-all"
+            style={activeTab === 'abstract' ? {
+              background: 'rgba(74, 222, 128, 0.15)',
+              color: 'rgb(134, 239, 172)',
+            } : {
+              background: 'rgba(255, 255, 255, 0.06)',
+              color: 'rgba(255, 255, 255, 0.5)',
+            }}
+          >
+            <span className={isPlanning ? 'shimmer-text' : ''}>Description</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('tasks')}
+            className="px-3 py-1 text-xs font-medium rounded-full transition-all"
+            style={activeTab === 'tasks' ? {
+              background: 'rgba(74, 222, 128, 0.15)',
+              color: 'rgb(134, 239, 172)',
+            } : {
+              background: 'rgba(255, 255, 255, 0.06)',
+              color: 'rgba(255, 255, 255, 0.5)',
+            }}
+          >
+            <span className={isGeneratingTasks ? 'shimmer-text' : ''}>
+              Tasks{totalCount > 0 ? ` ${totalCount}` : ''}
+            </span>
+          </button>
+        </div>
 
-          {/* Planning spinner */}
-          {currentPlan.status === 'planning' && (
-            <div className="flex items-center justify-center py-8">
-              <div className="flex items-center gap-2">
-                <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
-                <span className="shimmer-text font-mono text-xs">Analyzing and writing plan</span>
-              </div>
-            </div>
-          )}
+        {/* Tab content */}
+        <div className="flex-1 p-3 overflow-y-auto min-h-0">
 
-          {/* Abstract section — collapsible accordion */}
-          {currentPlan.abstract && (
-            <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
-              <button
-                onClick={() => setAbstractOpen(!abstractOpen)}
-                className="flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold text-white/70 hover:text-white transition-colors"
-              >
-                <span className={isPlanning ? 'shimmer-text' : ''}>Abstract</span>
-                {abstractOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />}
-              </button>
-              {abstractOpen && (
-                <div className="px-1 pb-3 text-sm plan-abstract">
+          {/* Abstract tab */}
+          {activeTab === 'abstract' && (
+            <>
+              {currentPlan.status === 'planning' && !currentPlan.abstract && (
+                <div className="flex items-center justify-center py-8">
+                  <div className="flex items-center gap-2">
+                    <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+                    <span className="shimmer-text font-mono text-xs">Analyzing and writing plan</span>
+                  </div>
+                </div>
+              )}
+              {currentPlan.abstract && (
+                <div className="px-1 text-sm plan-abstract">
                   <Markdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -326,68 +343,62 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                   </Markdown>
                 </div>
               )}
-            </div>
+            </>
           )}
 
-          {/* Execution progress bar */}
-          {currentPlan.status === 'executing' && (
-            <div className="px-1 py-1">
-              <div className="flex items-center gap-2 text-xs text-white/60 mb-1">
-                <span>Progress</span>
-                <span>{completedCount}/{totalCount}</span>
-                {pendingTestingCount > 0 && (
-                  <span className="text-green-300">({pendingTestingCount} pending review)</span>
-                )}
-              </div>
-              <div
-                className="h-1 rounded-full overflow-hidden"
-                style={{ background: 'rgba(255, 255, 255, 0.1)' }}
-              >
-                <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{
-                    width: `${progress}%`,
-                    background: 'linear-gradient(90deg, #BFFF6B, #6BFF9B)',
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Tasks section — collapsible accordion */}
-            <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
-              <button
-                onClick={() => (hasTasks || isGeneratingTasks) && setTasksOpen(!tasksOpen)}
-                className={`flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold transition-colors ${hasTasks || isGeneratingTasks ? 'text-white/70 hover:text-white cursor-pointer' : 'text-white/30 cursor-default'}`}
-              >
-                <span className={isGeneratingTasks ? 'shimmer-text' : ''}>Tasks {totalCount > 0 && <span className="text-white/40 font-normal">{totalCount}</span>}</span>
-                {(hasTasks || isGeneratingTasks) && (tasksOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />)}
-              </button>
-              {tasksOpen && (hasTasks || isGeneratingTasks) && (
-                <div className="space-y-2 pb-3">
-                  {isGeneratingTasks && !hasTasks && (
-                    <div className="flex items-center gap-2 px-1 py-2">
-                      <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
-                      <span className="shimmer-text font-mono text-xs">Generating tasks</span>
-                    </div>
-                  )}
-                  {tasks.map(task => (
-                    <TaskRow
-                      key={task.id}
-                      task={task}
-                      onMarkResolved={markTaskResolved}
-                      onRun={runTask}
-                      onStop={(taskId) => {
-                        const t = tasks.find(t => t.id === taskId)
-                        if (t?.assignedAgentId) killAgent(t.assignedAgentId)
+          {/* Tasks tab */}
+          {activeTab === 'tasks' && (
+            <>
+              {/* Execution progress bar */}
+              {currentPlan.status === 'executing' && (
+                <div className="px-1 py-1 mb-2">
+                  <div className="flex items-center gap-2 text-xs text-white/60 mb-1">
+                    <span>Progress</span>
+                    <span>{completedCount}/{totalCount}</span>
+                    {pendingTestingCount > 0 && (
+                      <span className="text-green-300">({pendingTestingCount} pending review)</span>
+                    )}
+                  </div>
+                  <div
+                    className="h-1 rounded-full overflow-hidden"
+                    style={{ background: 'rgba(255, 255, 255, 0.1)' }}
+                  >
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${progress}%`,
+                        background: 'linear-gradient(90deg, #BFFF6B, #6BFF9B)',
                       }}
-                      onRemove={removeTask}
-                      onShowPrompt={setModalPrompt}
                     />
-                  ))}
+                  </div>
                 </div>
               )}
-            </div>
+
+              {isGeneratingTasks && !hasTasks && (
+                <div className="flex items-center gap-2 px-1 py-2">
+                  <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+                  <span className="shimmer-text font-mono text-xs">Generating tasks</span>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {tasks.map(task => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    onMarkResolved={markTaskResolved}
+                    onRun={runTask}
+                    onStop={(taskId) => {
+                      const t = tasks.find(t => t.id === taskId)
+                      if (t?.assignedAgentId) killAgent(t.assignedAgentId)
+                    }}
+                    onRemove={removeTask}
+                    onShowPrompt={setModalPrompt}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Actions */}
