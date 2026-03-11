@@ -3,7 +3,9 @@ import { ListBulletIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useGekto, usePlanTasks, type Task } from '../context/GektoContext'
-import { useAgent } from '../context/AgentContext'
+import { useAgent, type FileChange } from '../context/AgentContext'
+import { DiffModal } from './whiteboard/DiffModal'
+import { ChatWindow } from './ChatWindow'
 
 interface GektoPlanPanelProps {
   position: { x: number; y: number }
@@ -83,9 +85,11 @@ interface TaskRowProps {
   onStop?: (taskId: string) => void
   onRemove?: (taskId: string) => void
   onShowPrompt?: (task: Task) => void
+  onShowDiff?: (agentId: string) => void
+  onOpenChat?: (agentId: string) => void
 }
 
-function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }: TaskRowProps) {
+function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRemove, onShowPrompt, onShowDiff, onOpenChat }: TaskRowProps) {
   const depth = treeNode?.depth ?? 0
 
   // Check if this pending task has all dependencies satisfied (ready to run)
@@ -243,6 +247,39 @@ function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRe
               <ListBulletIcon width={12} height={12} />
             </button>
           )}
+          {/* Diff button — show when agent has been assigned */}
+          {task.assignedAgentId && (
+            <button
+              onClick={() => onShowDiff?.(task.assignedAgentId!)}
+              className="w-6 h-6 flex items-center justify-center transition-all text-white/40 hover:text-white cursor-pointer rounded"
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+              title="View file changes"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+            </button>
+          )}
+          {/* Chat button — show when agent has been assigned */}
+          {task.assignedAgentId && (
+            <button
+              onClick={() => onOpenChat?.(task.assignedAgentId!)}
+              className="w-6 h-6 flex items-center justify-center transition-all text-white/40 hover:text-white cursor-pointer rounded"
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+              title="Open agent chat"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+          )}
           {task.status === 'pending_testing' && (
             <button
               onClick={handleMarkResolved}
@@ -271,9 +308,13 @@ function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRe
 
 export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProps) {
   const [modalPrompt, setModalPrompt] = useState<Task | null>(null)
+  const [diffAgentId, setDiffAgentId] = useState<string | null>(null)
+  const [chatAgentId, setChatAgentId] = useState<string | null>(null)
   const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, runAvailableTasks, removeTask } = useGekto()
   const tasks = usePlanTasks()
-  const { killAgent } = useAgent()
+  const { killAgent, getFileChanges, revertFiles } = useAgent()
+
+  const diffFileChanges: FileChange[] = diffAgentId ? getFileChanges(diffAgentId) : []
 
   const hasTasks = tasks.length > 0
   const isDraft = currentPlan?.status === 'draft'
@@ -478,37 +519,59 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
               )}
 
               {isGeneratingTasks && !hasTasks && (
-                <div className="space-y-2">
-                  {[0.8, 0.6, 0.5].map((width, i) => (
+                <div className="space-y-2 h-full">
+                  {[
+                    { w: 0.8, indent: 0 },
+                    { w: 0.6, indent: 0 },
+                    { w: 0.5, indent: 1 },
+                    { w: 0.7, indent: 1 },
+                    { w: 0.55, indent: 2 },
+                    { w: 0.65, indent: 1 },
+                    { w: 0.45, indent: 2 },
+                    { w: 0.75, indent: 2 },
+                  ].map(({ w, indent }, i) => (
                     <div
                       key={i}
-                      className="p-3 rounded"
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.02)',
-                        border: '1px solid rgba(255, 255, 255, 0.05)',
-                        animation: `skeleton-fade 1.5s ease-in-out ${i * 0.2}s infinite`,
-                      }}
+                      className="flex items-stretch"
+                      style={{ animation: `skeleton-fade 1.5s ease-in-out ${i * 0.15}s infinite` }}
                     >
+                      {/* Indent spacers with connector lines */}
+                      {Array.from({ length: indent }).map((_, j) => (
+                        <div key={j} className="shrink-0 relative" style={{ width: 20 }}>
+                          <div style={{
+                            position: 'absolute', left: 10, top: 0, bottom: 0,
+                            width: 1, background: 'rgba(255, 255, 255, 0.06)',
+                          }} />
+                        </div>
+                      ))}
                       <div
-                        className="rounded"
+                        className="flex-1 min-w-0 p-3 rounded"
                         style={{
-                          height: 14,
-                          width: `${width * 100}%`,
-                          background: 'linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.06) 75%)',
-                          backgroundSize: '200% 100%',
-                          animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          border: '1px solid rgba(255, 255, 255, 0.05)',
                         }}
-                      />
-                      <div
-                        className="rounded mt-2"
-                        style={{
-                          height: 10,
-                          width: `${width * 60}%`,
-                          background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.04) 75%)',
-                          backgroundSize: '200% 100%',
-                          animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
-                        }}
-                      />
+                      >
+                        <div
+                          className="rounded"
+                          style={{
+                            height: 14,
+                            width: `${w * 100}%`,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.06) 75%)',
+                            backgroundSize: '200% 100%',
+                            animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
+                          }}
+                        />
+                        <div
+                          className="rounded mt-2"
+                          style={{
+                            height: 10,
+                            width: `${w * 60}%`,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.04) 75%)',
+                            backgroundSize: '200% 100%',
+                            animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
+                          }}
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -529,6 +592,8 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                     }}
                     onRemove={removeTask}
                     onShowPrompt={setModalPrompt}
+                    onShowDiff={setDiffAgentId}
+                    onOpenChat={(agentId) => setChatAgentId(prev => prev === agentId ? null : agentId)}
                   />
                 ))}
               </div>
@@ -651,6 +716,36 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           )}
         </div>
       </div>
+
+      {/* Agent chat panel — right side of plan panel */}
+      {chatAgentId && (
+        <div
+          className="fixed"
+          data-swarm-ui
+          style={{
+            left: position.x + 520 + 8,
+            top: position.y,
+            zIndex: 1003,
+            pointerEvents: 'auto',
+          }}
+        >
+          <ChatWindow
+            key={chatAgentId}
+            lizardId={chatAgentId}
+            title={tasks.find(t => t.assignedAgentId === chatAgentId)?.name || 'Agent Chat'}
+            onClose={() => setChatAgentId(null)}
+          />
+        </div>
+      )}
+
+      {/* Diff modal */}
+      {diffAgentId && (
+        <DiffModal
+          fileChanges={diffFileChanges}
+          onClose={() => setDiffAgentId(null)}
+          onRevertFile={(filePath) => revertFiles(diffAgentId, [filePath])}
+        />
+      )}
 
       {/* Prompt modal */}
       {modalPrompt && (
