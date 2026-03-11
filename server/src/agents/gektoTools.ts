@@ -11,15 +11,21 @@ const OUTLINE_SYSTEM = `You are a senior engineer breaking a plan into concrete 
 Given a plan abstract and project context, output a JSON array of task outlines.
 
 Each outline object must have:
-- "name": 2-4 word title, like a commit subject. Examples: "Add search bar", "Sidebar CRUD", "Drag-to-reorder". NEVER more than 5 words.
+- "name": SHORT 2-4 word title, like a commit subject. Examples: "Add search bar", "Sidebar CRUD", "Drag-to-reorder", "TodoItem component", "Wire App state". NEVER more than 4 words. This is NOT a description — it's a label.
 - "description": what this task does (1-2 sentences)
 - "files": array of specific file paths to create/modify
+- "dependencies": array of 0-based indices of tasks this task depends on. Use [] for root tasks that can run immediately.
 
 Rules:
-- 3-7 tasks, ALL run in parallel (no dependencies between them)
+- 3-7 tasks
+- Prefer 2 levels of depth: Level 1 = build individual parts (components/hooks/utils) in parallel, Level 2 = integrate/compose them. Only use 3+ levels for genuine chains (e.g. Checkbox -> Todo Card -> Todo List -> App).
+- IMPORTANT: Tasks at the same level must be SIBLINGS, not chained. If TodoItem and TodoList both need the Types task, they should BOTH depend on [0] (the Types task) — do NOT make TodoList depend on TodoItem unless it literally imports from TodoItem's files.
+- Tasks without dependencies (root tasks) run first in parallel
+- Tasks with dependencies wait until all their dependencies are approved before becoming runnable
 - Tasks MUST NOT overlap on files — each file belongs to exactly one task
 - No "research" or "scaffold" tasks
-- Each task must be self-contained
+- Each task must be self-contained — it should not import from files created by other tasks
+- Only add a dependency when a task DIRECTLY needs files produced by another task. Do not create unnecessary sequential chains.
 
 Output ONLY a valid JSON array of outline objects, nothing else. No markdown wrapping.`
 
@@ -305,6 +311,7 @@ interface TaskOutline {
   name: string
   description: string
   files: string[]
+  dependencies?: number[] // 0-based indices of tasks this depends on
 }
 
 /**
@@ -350,11 +357,15 @@ async function generateDetail(
     plan.abstract || '',
     '',
     `ALL tasks in this plan (for context — do NOT generate prompts for other tasks):`,
-    ...outlines.map((o, i) => `${i + 1}. "${o.name}" — ${o.description} [files: ${o.files.join(', ')}]`),
+    ...outlines.map((o, i) => {
+      const deps = o.dependencies?.length ? ` [depends on: ${o.dependencies.map(d => `#${d + 1}`).join(', ')}]` : ''
+      return `${i + 1}. "${o.name}" — ${o.description} [files: ${o.files.join(', ')}]${deps}`
+    }),
     '',
     `YOUR TASK (#${taskIndex + 1}): "${outline.name}"`,
     `Description: ${outline.description}`,
     `Files: ${outline.files.join(', ')}`,
+    ...(outline.dependencies?.length ? [`Dependencies: ${outline.dependencies.map(d => `#${d + 1} "${outlines[d]?.name}"`).join(', ')} — you can assume these tasks are already completed.`] : []),
     '',
     `Generate the detailed implementation prompt for THIS task only.`,
   ].join('\n')
@@ -396,15 +407,20 @@ export async function generateTasksFromAbstract(
     const outlines = await generateOutline(plan, workingDir, outlineCallbacks)
     console.log(`[Gekto] Phase 1 done: ${outlines.length} outlines`)
 
+    // Build task IDs first so we can resolve dependency indices
+    const taskIds = outlines.map((_, i) => `${taskIdBase}_${i + 1}`)
+
     // Emit skeleton tasks immediately (with empty prompts) so UI shows them
     const tasks: Task[] = outlines.map((outline, i) => ({
-      id: `${taskIdBase}_${i + 1}`,
-      name: (outline.name || 'Task').slice(0, 50),
+      id: taskIds[i],
+      name: (outline.name || 'Task').slice(0, 30),
       description: outline.description || outline.name || 'Task',
       prompt: '', // filled in Phase 2
       files: (outline.files || []).filter((f: string) => f && String(f).trim()),
       status: 'pending' as const,
-      dependencies: [],
+      dependencies: (outline.dependencies || [])
+        .filter((idx: number) => idx >= 0 && idx < outlines.length && idx !== i)
+        .map((idx: number) => taskIds[idx]),
       planId: plan.id,
     }))
 

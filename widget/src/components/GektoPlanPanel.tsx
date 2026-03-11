@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { ListBulletIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -11,10 +11,73 @@ interface GektoPlanPanelProps {
   onClose: () => void
 }
 
+// Tree node for rendering task hierarchy
+interface TaskTreeNode {
+  task: Task
+  children: TaskTreeNode[]
+  depth: number
+  isLast: boolean // last child at this level
+  connectorFlags: boolean[] // which ancestor levels have a continuing vertical line
+}
 
+function buildTaskTree(tasks: Task[]): TaskTreeNode[] {
+  const taskMap = new Map(tasks.map(t => [t.id, t]))
+
+  // Find which tasks are children (depended upon by others)
+  // A task's "parent" is its first dependency (for tree display purposes)
+  const childrenOf = new Map<string, string[]>() // parentId -> childTaskIds
+  const hasParent = new Set<string>()
+
+  for (const task of tasks) {
+    if (task.dependencies.length > 0) {
+      // Use the last dependency as the tree parent (deepest in chain)
+      const parentId = task.dependencies[task.dependencies.length - 1]
+      if (taskMap.has(parentId)) {
+        const children = childrenOf.get(parentId) || []
+        children.push(task.id)
+        childrenOf.set(parentId, children)
+        hasParent.add(task.id)
+      }
+    }
+  }
+
+  // Root tasks = tasks with no dependencies or whose dependencies aren't in the task list
+  const roots = tasks.filter(t => !hasParent.has(t.id))
+
+  function buildNodes(taskIds: string[], depth: number, connectorFlags: boolean[]): TaskTreeNode[] {
+    return taskIds
+      .map(id => taskMap.get(id))
+      .filter((t): t is Task => !!t)
+      .map((task, i, arr) => {
+        const isLast = i === arr.length - 1
+        const children = childrenOf.get(task.id) || []
+        const nextFlags = depth > 0 ? [...connectorFlags, !isLast] : connectorFlags
+        return {
+          task,
+          depth,
+          isLast,
+          connectorFlags,
+          children: buildNodes(children, depth + 1, nextFlags),
+        }
+      })
+  }
+
+  return buildNodes(roots.map(t => t.id), 0, [])
+}
+
+function flattenTree(nodes: TaskTreeNode[]): TaskTreeNode[] {
+  const result: TaskTreeNode[] = []
+  for (const node of nodes) {
+    result.push(node)
+    result.push(...flattenTree(node.children))
+  }
+  return result
+}
 
 interface TaskRowProps {
   task: Task
+  allTasks: Task[]
+  treeNode?: TaskTreeNode
   onMarkResolved?: (taskId: string) => void
   onRun?: (taskId: string) => void
   onStop?: (taskId: string) => void
@@ -22,18 +85,23 @@ interface TaskRowProps {
   onShowPrompt?: (task: Task) => void
 }
 
-function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }: TaskRowProps) {
-  const [isRemoving, setIsRemoving] = useState(false)
+function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }: TaskRowProps) {
+  const depth = treeNode?.depth ?? 0
+
+  // Check if this pending task has all dependencies satisfied (ready to run)
+  // A dep is "done" when agent finished (pending_testing) or user approved (completed)
+  const depsReady = task.status === 'pending' && task.dependencies.length > 0 &&
+    task.dependencies.every(depId => {
+      const dep = allTasks.find(t => t.id === depId)
+      return dep?.status === 'completed' || dep?.status === 'pending_testing'
+    })
 
   const handleMarkResolved = () => {
-    setIsRemoving(true)
-    // Wait for animation to complete before actually removing
-    setTimeout(() => {
-      onMarkResolved?.(task.id)
-    }, 300)
+    onMarkResolved?.(task.id)
   }
 
   const getBackgroundStyle = () => {
+    if (depsReady) return { bg: 'rgba(74, 222, 128, 0.08)', border: '1px solid rgba(74, 222, 128, 0.2)' }
     switch (task.status) {
       case 'in_progress':
         return { bg: 'rgba(255, 255, 255, 0.04)', border: '1px solid rgba(255, 255, 255, 0.08)' }
@@ -50,23 +118,48 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
 
   const style = getBackgroundStyle()
 
+  const INDENT = 20
+
   return (
-    <div
-      className={`flex items-start gap-3 p-3 transition-all duration-300 rounded${task.status === 'in_progress' ? ' task-shimmer' : ''}`}
-      style={{
-        ...( task.status !== 'in_progress' ? { background: style.bg } : {}),
-        border: style.border,
-        opacity: isRemoving ? 0 : 1,
-        transform: isRemoving ? 'translateX(20px) scale(0.95)' : 'translateX(0) scale(1)',
-        maxHeight: isRemoving ? 0 : 500,
-        marginBottom: isRemoving ? 0 : undefined,
-        padding: isRemoving ? 0 : undefined,
-        overflow: 'hidden',
-      }}
-    >
+    <div className="flex items-stretch">
+      {/* Tree connector lines */}
+      {treeNode && depth > 0 && (
+        <>
+          {/* Ancestor continuation lines */}
+          {treeNode.connectorFlags.map((hasContinuation, i) => (
+            <div key={i} className="shrink-0 relative" style={{ width: INDENT }}>
+              {hasContinuation && (
+                <div style={{
+                  position: 'absolute', left: INDENT / 2, top: 0, bottom: 0,
+                  width: 1, background: 'rgba(255, 255, 255, 0.12)',
+                }} />
+              )}
+            </div>
+          ))}
+          {/* Branch connector: vertical + horizontal */}
+          <div className="shrink-0 relative" style={{ width: INDENT }}>
+            <div style={{
+              position: 'absolute', left: INDENT / 2, top: 0,
+              height: treeNode.isLast ? '50%' : '100%',
+              width: 1, background: 'rgba(255, 255, 255, 0.12)',
+            }} />
+            <div style={{
+              position: 'absolute', left: INDENT / 2, top: '50%',
+              width: INDENT / 2, height: 1, background: 'rgba(255, 255, 255, 0.12)',
+            }} />
+          </div>
+        </>
+      )}
+      <div
+        className={`flex-1 min-w-0 flex items-start gap-3 p-3 transition-all duration-300 rounded${task.status === 'in_progress' ? ' task-shimmer' : ''}`}
+        style={{
+          ...( task.status !== 'in_progress' ? { background: style.bg } : {}),
+          border: style.border,
+        }}
+      >
       <div className="flex-1 min-w-0 relative">
         {/* Play/Pause & Remove buttons — top right corner */}
-        {!isRemoving && (
+        {task.status !== 'completed' && (
           <div className="absolute top-0 right-0 flex items-center gap-1.5">
             {task.status === 'in_progress' ? (
               <button
@@ -82,9 +175,9 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
             ) : (
               <button
                 onClick={() => onRun?.(task.id)}
-                disabled={task.status === 'completed' || task.status === 'pending_testing' || !task.prompt}
+                disabled={task.status === 'completed' || task.status === 'pending_testing' || !task.prompt || (task.dependencies.length > 0 && !depsReady)}
                 className="w-6 h-6 flex items-center justify-center transition-all text-white/40 hover:text-white pl-px cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed"
-                title="Run task"
+                title={task.dependencies.length > 0 && !depsReady ? 'Waiting for dependencies' : 'Run task'}
               >
                 <svg width="8" height="10" viewBox="0 0 8 10" fill="currentColor">
                   <path d="M1 0.5a.5.5 0 0 1 .77-.42l5.73 3.57a.5.5 0 0 1 0 .84L1.77 8.06A.5.5 0 0 1 1 7.64V0.5Z" />
@@ -106,7 +199,7 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
         {/* Task name (short title) + description */}
         <div className="mb-1">
           <div
-            className="text-white text-sm font-medium pr-14 truncate"
+            className="text-white text-sm font-medium pr-14"
           >
             {task.name || task.description}
           </div>
@@ -150,7 +243,7 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
               <ListBulletIcon width={12} height={12} />
             </button>
           )}
-          {task.status === 'pending_testing' && !isRemoving && (
+          {task.status === 'pending_testing' && (
             <button
               onClick={handleMarkResolved}
               className="px-2 py-1 text-xs transition-colors rounded"
@@ -171,13 +264,14 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
           </div>
         )}
       </div>
+      </div>
     </div>
   )
 }
 
 export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProps) {
   const [modalPrompt, setModalPrompt] = useState<Task | null>(null)
-  const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, removeTask } = useGekto()
+  const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, runAvailableTasks, removeTask } = useGekto()
   const tasks = usePlanTasks()
   const { killAgent } = useAgent()
 
@@ -200,9 +294,18 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   }
   prevGenerating.current = isGeneratingTasks
 
+  // Build task tree for hierarchical rendering
+  const taskTreeFlat = useMemo(() => flattenTree(buildTaskTree(tasks)), [tasks])
+
   if (!currentPlan) return null
 
   const completedCount = tasks.filter(t => t.status === 'completed').length
+  // A dep is "done" if agent finished (pending_testing) or user approved (completed)
+  const doneTaskIds = new Set(tasks.filter(t => t.status === 'completed' || t.status === 'pending_testing').map(t => t.id))
+  const availableToRun = tasks.filter(t => {
+    if (t.status !== 'pending') return false
+    return t.dependencies.every(depId => doneTaskIds.has(depId))
+  })
   const pendingTestingCount = tasks.filter(t => t.status === 'pending_testing').length
   const totalCount = tasks.length
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0
@@ -411,11 +514,13 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                 </div>
               )}
 
-              <div className="space-y-2">
-                {tasks.map(task => (
+              <div className="space-y-1.5">
+                {taskTreeFlat.map(node => (
                   <TaskRow
-                    key={task.id}
-                    task={task}
+                    key={node.task.id}
+                    task={node.task}
+                    allTasks={tasks}
+                    treeNode={node}
                     onMarkResolved={markTaskResolved}
                     onRun={runTask}
                     onStop={(taskId) => {
@@ -498,21 +603,38 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                 border: '1px solid rgba(34, 197, 94, 0.2)',
               }}
             >
-              Generating Tasks...
+              {hasTasks
+                ? `Generating prompts ${tasks.filter(t => t.prompt).length}/${totalCount}`
+                : 'Generating tasks...'}
             </button>
           )}
           {currentPlan.status === 'executing' && (
-            <button
-              onClick={cancelPlan}
-              className="flex-1 px-4 py-2 text-sm font-medium transition-colors rounded"
-              style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                color: 'rgba(239, 68, 68, 0.8)',
-                border: '1px solid rgba(239, 68, 68, 0.2)',
-              }}
-            >
-              Cancel Execution
-            </button>
+            <>
+              {availableToRun.length > 0 && (
+                <button
+                  onClick={runAvailableTasks}
+                  className="flex-1 px-4 py-2 text-sm font-medium transition-colors rounded"
+                  style={{
+                    background: 'linear-gradient(to right bottom, rgba(34, 197, 94, 0.15), rgba(74, 222, 128, 0.35))',
+                    color: 'rgb(114, 222, 128)',
+                    border: '1px solid rgba(34, 197, 94, 0.2)',
+                  }}
+                >
+                  Run Available ({availableToRun.length})
+                </button>
+              )}
+              <button
+                onClick={cancelPlan}
+                className="px-4 py-2 text-sm font-medium transition-colors rounded"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: 'rgba(239, 68, 68, 0.8)',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                }}
+              >
+                Cancel
+              </button>
+            </>
           )}
           {(currentPlan.status === 'completed' || currentPlan.status === 'failed') && (
             <button

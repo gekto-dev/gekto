@@ -616,20 +616,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
           // Mark task resolved — remove from plan
           case 'mark_task_resolved': {
-            const state = getState()
-            if (state.plan) {
-              const remainingTaskIds = state.plan.taskIds.filter(id => id !== msg.taskId)
-              const allDone = remainingTaskIds.length === 0
-              mutateBatch([
-                { path: 'plan.taskIds', value: remainingTaskIds },
-                ...(allDone ? [
-                  { path: 'plan.status', value: 'completed' },
-                  { path: 'plan.completedAt', value: new Date().toISOString() },
-                ] : []),
-              ])
-              broadcastPlan()
-            }
-            // Mark task as completed
+            // Mark task as completed (keep it in plan.taskIds)
             if (msg.taskId) {
               mutate(`tasks.${msg.taskId}.status`, 'completed')
               broadcastTask(msg.taskId)
@@ -640,6 +627,21 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               mutate(`visuals.${msg.agentId}`, undefined)
               broadcastAgent(msg.agentId)
               broadcastVisualDelete(msg.agentId)
+            }
+            // Check if all tasks in the plan are now completed
+            const state = getState()
+            if (state.plan) {
+              const allCompleted = state.plan.taskIds.every(id => {
+                const t = state.tasks[id]
+                return t?.status === 'completed'
+              })
+              if (allCompleted) {
+                mutateBatch([
+                  { path: 'plan.status', value: 'completed' },
+                  { path: 'plan.completedAt', value: new Date().toISOString() },
+                ])
+                broadcastPlan()
+              }
             }
             return
           }

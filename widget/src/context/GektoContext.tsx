@@ -43,6 +43,7 @@ interface GektoContextValue {
   markTaskResolved: (taskId: string) => void
   retryTask: (taskId: string) => void
   runTask: (taskId: string) => void
+  runAvailableTasks: () => void
   removeTask: (taskId: string) => void
   markTaskInProgress: (lizardId: string) => void
 
@@ -174,14 +175,14 @@ export function GektoProvider({ children }: GektoProviderProps) {
       planId: plan.id,
     }))
 
-    // Find tasks that can run
-    const completedTaskIds = new Set(
-      tasks.filter(t => t.status === 'completed').map(t => t.id)
+    // Find tasks that can run (deps done = pending_testing or completed)
+    const doneTaskIds = new Set(
+      tasks.filter(t => t.status === 'completed' || t.status === 'pending_testing').map(t => t.id)
     )
 
     const tasksToRun = tasks.filter(task => {
       if (task.status !== 'pending') return false
-      return task.dependencies.every(depId => completedTaskIds.has(depId))
+      return task.dependencies.every(depId => doneTaskIds.has(depId))
     })
 
     // Create agents and tasks in store for each task to run
@@ -341,12 +342,22 @@ export function GektoProvider({ children }: GektoProviderProps) {
   const removeTask = useCallback((taskId: string) => {
     const task = serverState.tasks[taskId]
     const agentId = task?.assignedAgentId
+    const plan = currentPlanRef.current
 
-    send({
-      type: 'mark_task_resolved',
-      taskId,
-      agentId,
-    })
+    // Remove task from plan.taskIds
+    if (plan) {
+      const remainingIds = plan.taskIds.filter(id => id !== taskId)
+      send({ type: 'save_state', path: 'plan.taskIds', value: remainingIds })
+    }
+
+    // Delete task state
+    send({ type: 'save_state', path: `tasks.${taskId}`, value: undefined })
+
+    // Remove linked agent
+    if (agentId) {
+      send({ type: 'save_state', path: `agents.${agentId}`, value: undefined })
+      send({ type: 'save_state', path: `visuals.${agentId}`, value: undefined })
+    }
   }, [serverState.tasks, send])
 
   // Retry a task
@@ -407,7 +418,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     }))
 
     // Update plan status
-    if (currentPlan.status === 'ready') {
+    if (currentPlan.status === 'ready' || currentPlan.status === 'prompts_ready') {
       send({ type: 'save_state', path: 'plan.status', value: 'executing' })
     }
 
@@ -426,6 +437,86 @@ export function GektoProvider({ children }: GektoProviderProps) {
       sendMessage(agentId, taskContext + task.prompt)
     }, 100)
   }, [currentPlan, serverState.tasks, getWebSocket, sendMessage, send])
+
+  // Run all pending tasks whose dependencies are satisfied
+  const runAvailableTasks = useCallback(() => {
+    const plan = currentPlanRef.current
+    if (!plan) return
+
+    const tasks = planTasksRef.current
+    const ws = getWebSocket()
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+    // A dep is "done" if agent finished (pending_testing) or user approved (completed)
+    const doneTaskIds = new Set(
+      tasks.filter(t => t.status === 'completed' || t.status === 'pending_testing').map(t => t.id)
+    )
+
+    const available = tasks.filter(task => {
+      if (task.status !== 'pending') return false
+      return task.dependencies.every(depId => doneTaskIds.has(depId))
+    })
+
+    if (!available.length) return
+
+    // Update plan status if needed
+    if (plan.status === 'prompts_ready') {
+      send({ type: 'save_state', path: 'plan.status', value: 'executing' })
+    }
+
+    const assignments: { taskId: string; agentId: string; prompt: string; description: string; files: string[] }[] = []
+
+    for (let i = 0; i < available.length; i++) {
+      const task = available[i]
+      const agentId = `worker_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`
+
+      send({
+        type: 'create_task_and_agent',
+        task: {
+          id: task.id,
+          name: task.description.slice(0, 50),
+          description: task.description,
+          prompt: task.prompt,
+          status: 'in_progress',
+          planId: plan.id,
+          files: task.files,
+          assignedAgentId: agentId,
+          dependencies: task.dependencies,
+        },
+        agent: {
+          id: agentId,
+          taskId: task.id,
+          personaId: 'plain',
+          status: 'working',
+        },
+      })
+
+      ws.send(JSON.stringify({
+        type: 'task_started',
+        planId: plan.id,
+        taskId: task.id,
+        lizardId: agentId,
+      }))
+
+      assignments.push({ taskId: task.id, agentId, prompt: task.prompt, description: task.description, files: task.files })
+    }
+
+    setTimeout(() => {
+      for (const { taskId, agentId, prompt, description, files } of assignments) {
+        const taskContext = [
+          `[TASK_CONTEXT]`,
+          `Task ID: ${taskId}`,
+          `Task: ${description}`,
+          files?.length ? `Files to modify: ${files.join(', ')}` : null,
+          `Plan goal: ${plan.originalPrompt}`,
+          `[/TASK_CONTEXT]`,
+          '',
+        ].filter(Boolean).join('\n')
+
+        sendMessage(agentId, taskContext + prompt)
+      }
+    }, 100)
+  }, [getWebSocket, sendMessage, send])
 
   // Mark a task as in_progress when user sends message to linked worker
   const markTaskInProgress = useCallback((agentId: string) => {
@@ -637,52 +728,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
       error: isError ? result : undefined,
     }))
 
-    // Check if there are more tasks to run (with satisfied dependencies)
-    if (!isError) {
-      const updatedTasks = tasks.map(t =>
-        t.id === task.id
-          ? { ...t, status: (isError ? 'failed' : 'pending_testing') as TaskStatus }
-          : t
-      )
-
-      const completedTaskIds = new Set(
-        updatedTasks.filter(t => t.status === 'completed').map(t => t.id)
-      )
-
-      const nextTasks = updatedTasks.filter(t => {
-        if (t.status !== 'pending') return false
-        return t.dependencies.every(depId => completedTaskIds.has(depId))
-      })
-
-      for (const nextTask of nextTasks) {
-        const nextAgentId = `worker_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-
-        send({
-          type: 'create_task_and_agent',
-          task: {
-            id: nextTask.id,
-            name: nextTask.description.slice(0, 50),
-            description: nextTask.description,
-            prompt: nextTask.prompt,
-            status: 'in_progress',
-            planId: plan.id,
-            files: nextTask.files,
-            assignedAgentId: nextAgentId,
-            dependencies: nextTask.dependencies,
-          },
-          agent: {
-            id: nextAgentId,
-            taskId: nextTask.id,
-            personaId: 'plain',
-            status: 'working',
-          },
-        })
-
-        setTimeout(() => {
-          sendMessage(nextAgentId, nextTask.prompt)
-        }, 100)
-      }
-    }
+    // Dependent tasks become "ready" when all deps are approved (completed),
+    // but they do NOT auto-run — the user must manually start them.
   }, [getWebSocket, sendMessage, send])
 
   // Expose handlers for AgentContext to call via window
@@ -727,6 +774,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     markTaskResolved,
     retryTask,
     runTask,
+    runAvailableTasks,
     removeTask,
     markTaskInProgress,
     delegatePrompt,
@@ -747,6 +795,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     markTaskResolved,
     retryTask,
     runTask,
+    runAvailableTasks,
     removeTask,
     markTaskInProgress,
     delegatePrompt,
