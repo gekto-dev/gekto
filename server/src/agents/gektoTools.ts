@@ -190,7 +190,7 @@ The user's message above is a modification request. Respond with "update_plan" a
         type: 'build',
         plan,
         tasks: [],
-        message: parsed.message || parsed.abstract?.split('\n')[0] || 'Plan created.',
+        message: parsed.message || 'Plan created.',
       }
     }
 

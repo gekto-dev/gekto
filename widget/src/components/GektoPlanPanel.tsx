@@ -375,9 +375,39 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
               )}
 
               {isGeneratingTasks && !hasTasks && (
-                <div className="flex items-center gap-2 px-1 py-2">
-                  <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
-                  <span className="shimmer-text font-mono text-xs">Generating tasks</span>
+                <div className="space-y-2">
+                  {[0.8, 0.6, 0.5].map((width, i) => (
+                    <div
+                      key={i}
+                      className="p-3 rounded"
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                        animation: `skeleton-fade 1.5s ease-in-out ${i * 0.2}s infinite`,
+                      }}
+                    >
+                      <div
+                        className="rounded"
+                        style={{
+                          height: 14,
+                          width: `${width * 100}%`,
+                          background: 'linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.06) 75%)',
+                          backgroundSize: '200% 100%',
+                          animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
+                        }}
+                      />
+                      <div
+                        className="rounded mt-2"
+                        style={{
+                          height: 10,
+                          width: `${width * 60}%`,
+                          background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.04) 75%)',
+                          backgroundSize: '200% 100%',
+                          animation: 'skeleton-shimmer 1.8s ease-in-out infinite',
+                        }}
+                      />
+                    </div>
+                  ))}
                 </div>
               )}
 

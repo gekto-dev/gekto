@@ -77,6 +77,17 @@
   animation: metal-shimmer 3s linear infinite;
 }
 
+/* Skeleton loading for task generation */
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes skeleton-fade {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 /* Flickering animation for status indicator */
 @keyframes flicker {
   0%, 100% {
