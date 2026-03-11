@@ -393,6 +393,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
             try {
               const requestId = Date.now()
+              const generatedTaskIds = new Set<string>()
               const genCallbacks: TaskGenCallbacks = {
                 onToolStart: (tool, input) => {
                   ws.send(JSON.stringify({ type: 'gekto_tool_start', planId: msg.planId, requestId, tool, input: input ? JSON.stringify(input).slice(0, 200) : undefined }))
@@ -403,20 +404,27 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 onThinking: (text) => {
                   ws.send(JSON.stringify({ type: 'gekto_thinking', planId: msg.planId, requestId, text }))
                 },
-                onTasksGenerated: (tasks) => {
-                  // Store all tasks and update plan
-                  const mutations: Array<{ path: string; value: unknown }> = []
-                  for (const task of tasks) {
-                    mutations.push({ path: `tasks.${task.id}`, value: task })
+                onTaskReady: (task) => {
+                  // Store and broadcast each task (handles both initial skeleton and detail update)
+                  const isNew = !generatedTaskIds.has(task.id)
+                  generatedTaskIds.add(task.id)
+                  mutate(`tasks.${task.id}`, task)
+                  if (isNew) {
+                    mutate('plan.taskIds', [...generatedTaskIds])
                   }
-                  mutations.push({ path: 'plan.taskIds', value: tasks.map(t => t.id) })
-                  mutations.push({ path: 'plan.status', value: 'prompts_ready' })
-                  mutateBatch(mutations)
-
+                  broadcastTask(task.id)
                   broadcastPlan()
-                  for (const task of tasks) {
-                    broadcastTask(task.id)
-                  }
+                  ws.send(JSON.stringify({
+                    type: 'task_ready',
+                    planId: msg.planId,
+                    taskId: task.id,
+                  }))
+                },
+                onTasksGenerated: (tasks) => {
+                  // Final: update plan status to ready
+                  mutate('plan.taskIds', [...generatedTaskIds])
+                  mutate('plan.status', 'prompts_ready')
+                  broadcastPlan()
 
                   ws.send(JSON.stringify({
                     type: 'tasks_generated',

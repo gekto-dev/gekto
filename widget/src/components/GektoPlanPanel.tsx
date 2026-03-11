@@ -23,7 +23,6 @@ interface TaskRowProps {
 }
 
 function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }: TaskRowProps) {
-  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false)
   const [isRemoving, setIsRemoving] = useState(false)
 
   const handleMarkResolved = () => {
@@ -50,13 +49,6 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
   }
 
   const style = getBackgroundStyle()
-
-  // Split description into lines and check if truncation needed
-  const descriptionLines = task.description.split('\n')
-  const needsTruncation = descriptionLines.length > 2
-  const truncatedDescription = needsTruncation && !isDescriptionExpanded
-    ? descriptionLines.slice(0, 2).join('\n') + '...'
-    : task.description
 
   return (
     <div
@@ -111,31 +103,20 @@ function TaskRow({ task, onMarkResolved, onRun, onStop, onRemove, onShowPrompt }
           </div>
         )}
 
-        {/* Description - truncated to 2 lines, expandable */}
+        {/* Task name (short title) + description */}
         <div className="mb-1">
           <div
-            className="text-white text-sm font-medium whitespace-pre-wrap pr-14"
-            style={{ wordBreak: 'break-word' }}
+            className="text-white text-sm font-medium pr-14 truncate"
           >
-            {truncatedDescription}
+            {task.name || task.description}
           </div>
-          {needsTruncation && (
-            <button
-              onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
-              className="flex items-center gap-1 mt-1 text-xs text-white/50 hover:text-white/70 transition-colors"
+          {task.name && task.description && task.name !== task.description && (
+            <div
+              className="text-white/50 text-sm whitespace-pre-wrap mt-1.5"
+              style={{ wordBreak: 'break-word' }}
             >
-              {isDescriptionExpanded ? (
-                <>
-                  <ChevronUpIcon width={12} height={12} />
-                  <span>Show less</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDownIcon width={12} height={12} />
-                  <span>Show more</span>
-                </>
-              )}
-            </button>
+              {task.description}
+            </div>
           )}
         </div>
 
@@ -302,25 +283,21 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           {/* Planning spinner */}
           {currentPlan.status === 'planning' && (
             <div className="flex items-center justify-center py-8">
-              <div className="text-white/60 text-sm">
-                <span className="inline-flex gap-1">
-                  <span className="animate-bounce">.</span>
-                  <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
-                  <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
-                </span>
-                <span className="ml-2">Analyzing and writing plan</span>
+              <div className="flex items-center gap-2">
+                <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+                <span className="shimmer-text font-mono text-xs">Analyzing and writing plan</span>
               </div>
             </div>
           )}
 
           {/* Abstract section — collapsible accordion */}
           {currentPlan.abstract && (
-            <div className={isPlanning ? 'section-updating' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
               <button
                 onClick={() => setAbstractOpen(!abstractOpen)}
                 className="flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold text-white/70 hover:text-white transition-colors"
               >
-                <span>Abstract</span>
+                <span className={isPlanning ? 'shimmer-text' : ''}>Abstract</span>
                 {abstractOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />}
               </button>
               {abstractOpen && (
@@ -378,24 +355,20 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           )}
 
           {/* Tasks section — collapsible accordion */}
-            <div className={isGeneratingTasks ? 'section-updating' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
               <button
                 onClick={() => (hasTasks || isGeneratingTasks) && setTasksOpen(!tasksOpen)}
                 className={`flex items-center justify-between w-full text-left px-1 py-3 text-sm font-semibold transition-colors ${hasTasks || isGeneratingTasks ? 'text-white/70 hover:text-white cursor-pointer' : 'text-white/30 cursor-default'}`}
               >
-                <span>Tasks {totalCount > 0 && <span className="text-white/40 font-normal">{totalCount}</span>}</span>
+                <span className={isGeneratingTasks ? 'shimmer-text' : ''}>Tasks {totalCount > 0 && <span className="text-white/40 font-normal">{totalCount}</span>}</span>
                 {(hasTasks || isGeneratingTasks) && (tasksOpen ? <ChevronUpIcon width={14} height={14} /> : <ChevronDownIcon width={14} height={14} />)}
               </button>
               {tasksOpen && (hasTasks || isGeneratingTasks) && (
                 <div className="space-y-2 pb-3">
                   {isGeneratingTasks && !hasTasks && (
-                    <div className="flex items-center gap-2 px-1 py-2 text-xs text-white/50">
-                      <span className="inline-flex gap-0.5">
-                        <span className="animate-bounce">.</span>
-                        <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
-                        <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
-                      </span>
-                      <span>Generating tasks from abstract</span>
+                    <div className="flex items-center gap-2 px-1 py-2">
+                      <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+                      <span className="shimmer-text font-mono text-xs">Generating tasks</span>
                     </div>
                   )}
                   {tasks.map(task => (
@@ -554,13 +527,46 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
               </div>
               {/* Modal body */}
               <div
-                className="flex-1 overflow-y-auto p-5 text-xs text-white/80 whitespace-pre-wrap"
-                style={{
-                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                  wordBreak: 'break-word',
-                }}
+                className="flex-1 overflow-y-auto p-5 text-sm plan-abstract"
+                style={{ wordBreak: 'break-word' }}
               >
-                {modalPrompt.prompt}
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    p: ({ children }) => <p className="text-white/70 leading-relaxed mb-3 last:mb-0">{children}</p>,
+                    strong: ({ children }) => <strong className="text-white/90 font-semibold">{children}</strong>,
+                    ul: ({ children }) => <ul className="text-white/60 list-disc pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ul>,
+                    ol: ({ children }) => <ol className="text-white/60 list-decimal pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ol>,
+                    li: ({ children }) => <li className="text-white/60 leading-relaxed">{children}</li>,
+                    code: ({ children }) => {
+                      const text = typeof children === 'string' ? children : String(children ?? '')
+                      const isPath = text.includes('/') && !text.includes(' ')
+                      const display = isPath ? text.split('/').slice(-2).join('/') : text
+                      return <code className="text-[#BFFF6B] text-xs px-1 py-0.5 rounded" title={isPath ? text : undefined} style={{ background: 'rgba(255,255,255,0.06)' }}>{display}</code>
+                    },
+                    h1: ({ children }) => <h2 className="text-white font-semibold text-base mb-2">{children}</h2>,
+                    h2: ({ children }) => <h3 className="text-white font-semibold text-sm mb-2">{children}</h3>,
+                    h3: ({ children }) => <h4 className="text-white/90 font-medium text-sm mb-1">{children}</h4>,
+                  }}
+                >
+                  {(() => {
+                    const raw = modalPrompt.prompt
+                    const stripped = raw.trim().replace(/^```json\s*/m, '').replace(/```\s*$/m, '').trim()
+                    try {
+                      const obj = JSON.parse(stripped)
+                      if (obj.prompt) return obj.prompt
+                    } catch { /* not pure JSON */ }
+                    const start = raw.indexOf('{')
+                    const end = raw.lastIndexOf('}')
+                    if (start >= 0 && end > start) {
+                      try {
+                        const obj = JSON.parse(raw.slice(start, end + 1))
+                        if (obj.prompt) return obj.prompt
+                      } catch { /* not valid JSON block */ }
+                    }
+                    return raw
+                  })()}
+                </Markdown>
               </div>
             </div>
           </div>

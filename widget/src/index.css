@@ -60,16 +60,21 @@
   animation: task-shimmer 2.5s linear infinite;
 }
 
-/* Green shine pulse for updating plan sections */
-@keyframes section-shine {
-  0% { box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.05), 0 0 0 0 rgba(74, 222, 128, 0); }
-  50% { box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.25), 0 0 8px 0 rgba(74, 222, 128, 0.08); }
-  100% { box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.05), 0 0 0 0 rgba(74, 222, 128, 0); }
-}
-
-.section-updating {
-  animation: section-shine 2s ease-in-out infinite;
-  border-radius: 6px;
+/* Shimmer text for loading states (reuses metal-shimmer animation) */
+.shimmer-text {
+  background: linear-gradient(
+    105deg,
+    rgba(134, 239, 172, 0.6) 0%,
+    rgba(187, 247, 208, 0.95) 25%,
+    rgba(220, 252, 231, 1) 50%,
+    rgba(187, 247, 208, 0.95) 75%,
+    rgba(134, 239, 172, 0.6) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: metal-shimmer 3s linear infinite;
 }
 
 /* Flickering animation for status indicator */

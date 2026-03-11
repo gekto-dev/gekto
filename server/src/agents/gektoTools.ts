@@ -6,28 +6,36 @@ import type { Task, ExecutionPlan, GektoToolResult } from './types.js'
 // Re-export types for backward compatibility
 export type { Task, ExecutionPlan, GektoToolResult } from './types.js'
 
-// System prompt for generating structured tasks from a plan abstract
-const TASK_GEN_SYSTEM = `You are a senior engineer breaking a plan abstract into concrete coding tasks.
-Given a plan abstract and project context, output a JSON array of tasks.
+// Phase 1: Generate task outline (names, files, brief descriptions)
+const OUTLINE_SYSTEM = `You are a senior engineer breaking a plan into concrete coding tasks.
+Given a plan abstract and project context, output a JSON array of task outlines.
 
-Each task object must have:
-- "name": short title (under 6 words)
+Each outline object must have:
+- "name": 2-4 word title, like a commit subject. Examples: "Add search bar", "Sidebar CRUD", "Drag-to-reorder". NEVER more than 5 words.
 - "description": what this task does (1-2 sentences)
 - "files": array of specific file paths to create/modify
+
+Rules:
+- 3-7 tasks, ALL run in parallel (no dependencies between them)
+- Tasks MUST NOT overlap on files — each file belongs to exactly one task
+- No "research" or "scaffold" tasks
+- Each task must be self-contained
+
+Output ONLY a valid JSON array of outline objects, nothing else. No markdown wrapping.`
+
+// Phase 2: Generate detailed prompt for a single task
+const DETAIL_SYSTEM = `You are a senior engineer writing a detailed implementation prompt for a coding agent.
+You will receive the overall plan, the full task outline (all tasks), and the specific task you must detail.
+
+Output a JSON object with:
 - "prompt": detailed agent prompt (100-300 words) telling the agent:
-  - Specific files to create/modify
+  - Specific files to create/modify (ONLY the files assigned to this task)
   - Implementation approach
   - Edge cases to handle
   - What "done" looks like
   - MUST include: "Do NOT import from files created by other tasks"
 
-Rules:
-- 3-7 tasks, ALL run in parallel (no dependencies between them)
-- Tasks must not overlap on files
-- No "research" or "scaffold" tasks
-- Each task must be self-contained
-
-Output ONLY a valid JSON array of task objects, nothing else. No markdown wrapping.`
+Output ONLY a valid JSON object, nothing else. No markdown wrapping.`
 
 // === Callbacks for streaming events ===
 
@@ -284,6 +292,7 @@ function parseJsonArray(raw: string): Array<{ name?: string; description?: strin
 
 export interface TaskGenCallbacks {
   onTasksGenerated?: (tasks: Task[]) => void
+  onTaskReady?: (task: Task) => void
   onError?: (error: string) => void
   onToolStart?: (tool: string, input?: Record<string, unknown>) => void
   onToolEnd?: (tool: string) => void
@@ -291,13 +300,22 @@ export interface TaskGenCallbacks {
   onThinking?: (text: string) => void
 }
 
-export async function generateTasksFromAbstract(
+// Outline shape from Phase 1
+interface TaskOutline {
+  name: string
+  description: string
+  files: string[]
+}
+
+/**
+ * Phase 1: Generate task outlines (names, files, brief descriptions).
+ * Fast call — Claude only outputs a small JSON array.
+ */
+async function generateOutline(
   plan: ExecutionPlan,
   workingDir: string,
-  callbacks?: TaskGenCallbacks,
-): Promise<Task[]> {
-  const taskIdBase = plan.id.replace(/^plan_/, '')
-
+  callbacks?: PlanCallbacks,
+): Promise<TaskOutline[]> {
   const userPrompt = [
     `Project goal: ${plan.originalPrompt}`,
     '',
@@ -307,32 +325,113 @@ export async function generateTasksFromAbstract(
     plan.buildPrompt ? `Build step (runs after all tasks): ${plan.buildPrompt}` : '',
   ].filter(Boolean).join('\n')
 
+  const raw = await runClaudeOnce(userPrompt, OUTLINE_SYSTEM, workingDir, callbacks)
+  const parsed = parseJsonArray(raw) as TaskOutline[]
+
+  if (!parsed.length) throw new Error('No task outlines generated')
+  return parsed
+}
+
+/**
+ * Phase 2: Generate detailed prompt for a single task.
+ * Each call gets the full outline context so it knows about other tasks.
+ */
+async function generateDetail(
+  plan: ExecutionPlan,
+  outlines: TaskOutline[],
+  taskIndex: number,
+  workingDir: string,
+): Promise<string> {
+  const outline = outlines[taskIndex]
+  const userPrompt = [
+    `Project goal: ${plan.originalPrompt}`,
+    '',
+    `Plan abstract:`,
+    plan.abstract || '',
+    '',
+    `ALL tasks in this plan (for context — do NOT generate prompts for other tasks):`,
+    ...outlines.map((o, i) => `${i + 1}. "${o.name}" — ${o.description} [files: ${o.files.join(', ')}]`),
+    '',
+    `YOUR TASK (#${taskIndex + 1}): "${outline.name}"`,
+    `Description: ${outline.description}`,
+    `Files: ${outline.files.join(', ')}`,
+    '',
+    `Generate the detailed implementation prompt for THIS task only.`,
+  ].join('\n')
+
+  const raw = await runClaudeOnce(userPrompt, DETAIL_SYSTEM, workingDir)
+
+  // Parse JSON object with "prompt" field
   try {
-    const streamCallbacks: PlanCallbacks = {
+    const obj = JSON.parse(raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, ''))
+    return obj.prompt || raw
+  } catch {
+    // If not valid JSON, use raw text as prompt
+    return raw
+  }
+}
+
+/**
+ * Two-phase task generation:
+ * 1. One call to get outlines (fast, ~3-4s)
+ * 2. Parallel calls to get detailed prompts (~5s each, all at once)
+ * Tasks appear progressively as each parallel call resolves.
+ */
+export async function generateTasksFromAbstract(
+  plan: ExecutionPlan,
+  workingDir: string,
+  callbacks?: TaskGenCallbacks,
+): Promise<Task[]> {
+  const taskIdBase = plan.id.replace(/^plan_/, '')
+
+  try {
+    // Phase 1: Generate outlines
+    console.log('[Gekto] Phase 1: Generating task outlines...')
+    const outlineCallbacks: PlanCallbacks = {
       onToolStart: callbacks?.onToolStart,
       onToolEnd: callbacks?.onToolEnd,
       onText: callbacks?.onText,
       onThinking: callbacks?.onThinking,
     }
-    const result = await runClaudeOnce(userPrompt, TASK_GEN_SYSTEM, workingDir, streamCallbacks)
+    const outlines = await generateOutline(plan, workingDir, outlineCallbacks)
+    console.log(`[Gekto] Phase 1 done: ${outlines.length} outlines`)
 
-    // Parse JSON array of tasks — robust extraction
-    const rawTasks = parseJsonArray(result)
-
-    if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
-      throw new Error('No tasks generated')
-    }
-
-    const tasks: Task[] = rawTasks.map((t, i) => ({
+    // Emit skeleton tasks immediately (with empty prompts) so UI shows them
+    const tasks: Task[] = outlines.map((outline, i) => ({
       id: `${taskIdBase}_${i + 1}`,
-      name: (t.name || t.description || 'Task').slice(0, 50),
-      description: t.description || t.name || 'Task',
-      prompt: t.prompt || t.description || '',
-      files: (t.files || []).filter((f: string) => f && String(f).trim()),
+      name: (outline.name || 'Task').slice(0, 50),
+      description: outline.description || outline.name || 'Task',
+      prompt: '', // filled in Phase 2
+      files: (outline.files || []).filter((f: string) => f && String(f).trim()),
       status: 'pending' as const,
       dependencies: [],
       planId: plan.id,
     }))
+
+    // Notify UI of each skeleton task
+    for (const task of tasks) {
+      callbacks?.onTaskReady?.(task)
+    }
+
+    // Phase 2: Generate detailed prompts in parallel
+    console.log(`[Gekto] Phase 2: Generating ${outlines.length} detail prompts in parallel...`)
+    const detailPromises = outlines.map((_, i) =>
+      generateDetail(plan, outlines, i, workingDir)
+        .then((prompt) => {
+          tasks[i].prompt = prompt
+          // Update the task in UI with the detailed prompt
+          callbacks?.onTaskReady?.(tasks[i])
+          console.log(`[Gekto] Phase 2: Task ${i + 1}/${outlines.length} detail ready`)
+        })
+        .catch((err) => {
+          console.error(`[Gekto] Phase 2: Task ${i + 1} detail failed:`, err)
+          // Use description as fallback prompt
+          tasks[i].prompt = tasks[i].description
+        })
+    )
+
+    await Promise.all(detailPromises)
+    console.log('[Gekto] Phase 2 done: All detail prompts generated')
 
     callbacks?.onTasksGenerated?.(tasks)
     return tasks
@@ -340,7 +439,7 @@ export async function generateTasksFromAbstract(
     const errorMsg = err instanceof Error ? err.message : 'Failed to generate tasks'
     callbacks?.onError?.(errorMsg)
     // Fallback: single task from abstract
-    return [{
+    const fallback: Task = {
       id: `${taskIdBase}_1`,
       name: 'Execute plan',
       description: plan.abstract || plan.originalPrompt,
@@ -349,7 +448,9 @@ export async function generateTasksFromAbstract(
       status: 'pending' as const,
       dependencies: [],
       planId: plan.id,
-    }]
+    }
+    callbacks?.onTaskReady?.(fallback)
+    return [fallback]
   }
 }
 

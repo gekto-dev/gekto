@@ -419,8 +419,8 @@ export class TaskShapeUtil extends ShapeUtil<any> {
             />
           </div>
 
-          {/* Dynamic Block: Action / Error / Result */}
-          {message && (
+          {/* Dynamic Block: Errors only */}
+          {message && status === 'error' && (
             <DynamicBlock status={status} message={message} />
           )}
 

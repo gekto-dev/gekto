@@ -48,17 +48,8 @@ function buildShapeProps(agent: Agent, task: Task | undefined, index: number, cu
   // Generate friendly name if no task
   const title = task?.name || `Agent ${index + 1}`
 
-  // Determine abstract based on agent status:
-  // - Working: show latest streaming text
-  // - Done/Pending: show streaming text (last message) truncated to 100 chars
-  // - Otherwise: show task description
-  let abstract = task?.description || ''
-  if (agent.status === 'working' && streamingText) {
-    abstract = streamingText
-  } else if ((agent.status === 'done' || agent.status === 'pending') && streamingText) {
-    // Show last streaming text truncated to 100 chars
-    abstract = streamingText.length > 100 ? streamingText.substring(0, 100) + '...' : streamingText
-  }
+  // Abstract always shows task description — agent response goes to chat, not here
+  const abstract = task?.description || ''
 
   // Build props - only include optional fields if they have values (like Add Tasks button)
   const props: Record<string, unknown> = {
@@ -69,9 +60,9 @@ function buildShapeProps(agent: Agent, task: Task | undefined, index: number, cu
     status,
   }
 
-  // Optional fields
+  // Only show errors on card, not results (results are in chat)
   if (task?.error) props.message = task.error
-  else if (task?.result) props.message = task.result
+  else props.message = ''
 
   // Always include agentId for reverse lookup
   props.agentId = agent.id
