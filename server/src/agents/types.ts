@@ -56,6 +56,7 @@ export interface Task {
   description: string
   prompt: string
   files: string[]
+  fileActions?: Record<string, 'create' | 'edit'>
   status: TaskStatus
   dependencies: string[]
   planId?: string

@@ -54,6 +54,7 @@ export interface Task {
   status: TaskStatus
   planId?: string
   files?: string[]
+  fileActions?: Record<string, 'create' | 'edit'>
   assignedAgentId?: string
   dependencies?: string[]
   result?: string
@@ -374,5 +375,14 @@ export function updateLocalAgentMessages(agentId: string, messages: Message[]): 
       },
     }
   }
+  emitChange()
+}
+
+/**
+ * Update currentMasterId in client-side state directly.
+ * Used by ChatWindow when restoring a session.
+ */
+export function updateLocalCurrentMasterId(masterId: string): void {
+  currentState = { ...currentState, currentMasterId: masterId }
   emitChange()
 }

@@ -1,9 +1,11 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { ListBulletIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useGekto, usePlanTasks, type Task } from '../context/GektoContext'
-import { useAgent, type FileChange } from '../context/AgentContext'
+import { useAgent } from '../context/AgentContext'
+import { useStore } from '../store/store'
 import { DiffModal } from './whiteboard/DiffModal'
 import { ChatWindow } from './ChatWindow'
 
@@ -91,6 +93,8 @@ interface TaskRowProps {
 
 function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRemove, onShowPrompt, onShowDiff, onOpenChat }: TaskRowProps) {
   const depth = treeNode?.depth ?? 0
+  const agent = useStore((s) => task.assignedAgentId ? s.agents[task.assignedAgentId] : undefined)
+  const fileChanges = agent?.fileChanges ?? []
 
   // Check if this pending task has all dependencies satisfied (ready to run)
   // A dep is "done" when agent finished (pending_testing) or user approved (completed)
@@ -217,8 +221,8 @@ function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRe
           )}
         </div>
 
-        {/* Prompt button and resolve */}
-        <div className="flex items-center gap-2 mt-2">
+        {/* Prompt button, files, and resolve */}
+        <div className="flex items-end gap-2 mt-2 flex-wrap">
           {task.status === 'pending' || task.status === 'failed' ? (
             <button
               onClick={() => task.prompt && onShowPrompt?.(task)}
@@ -293,6 +297,33 @@ function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRe
               Mark Resolved
             </button>
           )}
+          {/* Files this task touches */}
+          {task.files && task.files.length > 0 && task.files.map((filePath) => {
+            const fileName = filePath.split('/').pop() || filePath
+            const action = task.fileActions?.[filePath]
+            return (
+              <span
+                key={filePath}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded"
+                style={{
+                  background: 'rgba(191, 255, 107, 0.06)',
+                  color: '#BFFF6B',
+                }}
+                title={filePath}
+              >
+                {action === 'create' ? (
+                  <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="#BFFF6B" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M5 1v8M1 5h8" />
+                  </svg>
+                ) : action === 'edit' ? (
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#BFFF6B" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M7.5 1.5l1 1-5.5 5.5-1.5.5.5-1.5z" />
+                  </svg>
+                ) : null}
+                {fileName}
+              </span>
+            )
+          })}
         </div>
 
         {task.error && (
@@ -312,9 +343,20 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   const [chatAgentId, setChatAgentId] = useState<string | null>(null)
   const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, runAvailableTasks, removeTask } = useGekto()
   const tasks = usePlanTasks()
-  const { killAgent, getFileChanges, revertFiles } = useAgent()
+  const { killAgent, revertFiles, acceptAgent } = useAgent()
+  const agents = useStore((s) => s.agents)
 
-  const diffFileChanges: FileChange[] = diffAgentId ? getFileChanges(diffAgentId) : []
+  const diffFileChanges = diffAgentId ? agents[diffAgentId]?.fileChanges ?? [] : []
+
+  // When diff modal is open, lower gekto-root z-index so the portaled modal is visible above it
+  useEffect(() => {
+    if (!diffAgentId) return
+    const root = document.getElementById('gekto-root')
+    if (!root) return
+    const prev = root.style.zIndex
+    root.style.zIndex = '1'
+    return () => { root.style.zIndex = prev }
+  }, [diffAgentId])
 
   const hasTasks = tasks.length > 0
   const isDraft = currentPlan?.status === 'draft'
@@ -360,6 +402,7 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   )
 
   return (
+    <>
     <div
       className="fixed"
       data-swarm-ui
@@ -675,9 +718,9 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           )}
           {currentPlan.status === 'executing' && (
             <>
-              {availableToRun.length > 0 && (
+              {allTasksDone ? (
                 <button
-                  onClick={runAvailableTasks}
+                  onClick={cancelPlan}
                   className="flex-1 px-4 py-2 text-sm font-medium transition-colors rounded"
                   style={{
                     background: 'linear-gradient(to right bottom, rgba(34, 197, 94, 0.15), rgba(74, 222, 128, 0.35))',
@@ -685,20 +728,36 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
                     border: '1px solid rgba(34, 197, 94, 0.2)',
                   }}
                 >
-                  Run Available ({availableToRun.length})
+                  Finish
                 </button>
+              ) : (
+                <>
+                  {availableToRun.length > 0 && (
+                    <button
+                      onClick={runAvailableTasks}
+                      className="flex-1 px-4 py-2 text-sm font-medium transition-colors rounded"
+                      style={{
+                        background: 'linear-gradient(to right bottom, rgba(34, 197, 94, 0.15), rgba(74, 222, 128, 0.35))',
+                        color: 'rgb(114, 222, 128)',
+                        border: '1px solid rgba(34, 197, 94, 0.2)',
+                      }}
+                    >
+                      Run Available ({availableToRun.length})
+                    </button>
+                  )}
+                  <button
+                    onClick={cancelPlan}
+                    className="px-4 py-2 text-sm font-medium transition-colors rounded"
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      color: 'rgba(239, 68, 68, 0.8)',
+                      border: '1px solid rgba(239, 68, 68, 0.2)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
               )}
-              <button
-                onClick={cancelPlan}
-                className="px-4 py-2 text-sm font-medium transition-colors rounded"
-                style={{
-                  background: 'rgba(239, 68, 68, 0.1)',
-                  color: 'rgba(239, 68, 68, 0.8)',
-                  border: '1px solid rgba(239, 68, 68, 0.2)',
-                }}
-              >
-                Cancel
-              </button>
             </>
           )}
           {(currentPlan.status === 'completed' || currentPlan.status === 'failed') && (
@@ -738,98 +797,110 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
         </div>
       )}
 
-      {/* Diff modal */}
-      {diffAgentId && (
-        <DiffModal
-          fileChanges={diffFileChanges}
-          onClose={() => setDiffAgentId(null)}
-          onRevertFile={(filePath) => revertFiles(diffAgentId, [filePath])}
-        />
-      )}
+    </div>
 
-      {/* Prompt modal */}
-      {modalPrompt && (
-        <div
-          className="fixed inset-0"
-          style={{ zIndex: 10001 }}
-          onClick={() => setModalPrompt(null)}
-        >
-          <div className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.7)' }} />
-          <div className="flex items-center justify-center w-full h-full">
-            <div
-              className="relative overflow-hidden flex flex-col rounded-lg"
-              onClick={e => e.stopPropagation()}
-              style={{
-                width: 700,
-                maxWidth: '90vw',
-                maxHeight: '80vh',
-                background: 'linear-gradient(135deg, rgb(35, 35, 45), rgb(45, 45, 55))',
-                backdropFilter: 'blur(12px) saturate(180%)',
-                WebkitBackdropFilter: 'blur(12px) saturate(180%)',
-                    }}
-            >
-              {/* Modal header */}
-              <div
-                className="flex items-center justify-between px-5 py-3 shrink-0"
-                style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}
-              >
-                <span className="text-white font-medium text-sm truncate pr-4">
-                  {modalPrompt.description}
-                </span>
-                <button
-                  onClick={() => setModalPrompt(null)}
-                  className="text-white/60 hover:text-white transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 shrink-0 rounded"
-                >
-                  ✕
-                </button>
-              </div>
-              {/* Modal body */}
-              <div
-                className="flex-1 overflow-y-auto p-5 text-sm plan-abstract"
-                style={{ wordBreak: 'break-word' }}
-              >
-                <Markdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    p: ({ children }) => <p className="text-white/70 leading-relaxed mb-3 last:mb-0">{children}</p>,
-                    strong: ({ children }) => <strong className="text-white/90 font-semibold">{children}</strong>,
-                    ul: ({ children }) => <ul className="text-white/60 list-disc pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ul>,
-                    ol: ({ children }) => <ol className="text-white/60 list-decimal pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ol>,
-                    li: ({ children }) => <li className="text-white/60 leading-relaxed">{children}</li>,
-                    code: ({ children }) => {
-                      const text = typeof children === 'string' ? children : String(children ?? '')
-                      const isPath = text.includes('/') && !text.includes(' ')
-                      const display = isPath ? text.split('/').slice(-2).join('/') : text
-                      return <code className="text-[#BFFF6B] text-xs px-1 py-0.5 rounded" title={isPath ? text : undefined} style={{ background: 'rgba(255,255,255,0.06)' }}>{display}</code>
-                    },
-                    h1: ({ children }) => <h2 className="text-white font-semibold text-base mb-2">{children}</h2>,
-                    h2: ({ children }) => <h3 className="text-white font-semibold text-sm mb-2">{children}</h3>,
-                    h3: ({ children }) => <h4 className="text-white/90 font-medium text-sm mb-1">{children}</h4>,
+    {/* Diff modal — portaled to body, gekto-root z-index lowered while open */}
+    {diffAgentId && createPortal(
+      <DiffModal
+        fileChanges={diffFileChanges}
+        onClose={() => setDiffAgentId(null)}
+        onRevertFile={(filePath) => revertFiles(diffAgentId, [filePath])}
+        onRevertAll={() => {
+          const changes = agents[diffAgentId]?.fileChanges ?? []
+          revertFiles(diffAgentId, changes.map(fc => fc.filePath))
+          setDiffAgentId(null)
+        }}
+        onAcceptAll={() => {
+          acceptAgent(diffAgentId)
+          setDiffAgentId(null)
+        }}
+      />,
+      document.body,
+    )}
+
+    {/* Prompt modal */}
+    {modalPrompt && (
+      <div
+        className="fixed inset-0"
+        style={{ zIndex: 10001 }}
+        onClick={() => setModalPrompt(null)}
+      >
+        <div className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.7)' }} />
+        <div className="flex items-center justify-center w-full h-full">
+          <div
+            className="relative overflow-hidden flex flex-col rounded-lg"
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 700,
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              background: 'linear-gradient(135deg, rgb(35, 35, 45), rgb(45, 45, 55))',
+              backdropFilter: 'blur(12px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(12px) saturate(180%)',
                   }}
-                >
-                  {(() => {
-                    const raw = modalPrompt.prompt
-                    const stripped = raw.trim().replace(/^```json\s*/m, '').replace(/```\s*$/m, '').trim()
+          >
+            {/* Modal header */}
+            <div
+              className="flex items-center justify-between px-5 py-3 shrink-0"
+              style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}
+            >
+              <span className="text-white font-medium text-sm truncate pr-4">
+                {modalPrompt.description}
+              </span>
+              <button
+                onClick={() => setModalPrompt(null)}
+                className="text-white/60 hover:text-white transition-colors w-6 h-6 flex items-center justify-center hover:bg-white/10 shrink-0 rounded"
+              >
+                ✕
+              </button>
+            </div>
+            {/* Modal body */}
+            <div
+              className="flex-1 overflow-y-auto p-5 text-sm plan-abstract"
+              style={{ wordBreak: 'break-word' }}
+            >
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  p: ({ children }) => <p className="text-white/70 leading-relaxed mb-3 last:mb-0">{children}</p>,
+                  strong: ({ children }) => <strong className="text-white/90 font-semibold">{children}</strong>,
+                  ul: ({ children }) => <ul className="text-white/60 list-disc pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ul>,
+                  ol: ({ children }) => <ol className="text-white/60 list-decimal pl-4 mb-3 last:mb-0 space-y-0.5">{children}</ol>,
+                  li: ({ children }) => <li className="text-white/60 leading-relaxed">{children}</li>,
+                  code: ({ children }) => {
+                    const text = typeof children === 'string' ? children : String(children ?? '')
+                    const isPath = text.includes('/') && !text.includes(' ')
+                    const display = isPath ? text.split('/').slice(-2).join('/') : text
+                    return <code className="text-[#BFFF6B] text-xs px-1 py-0.5 rounded" title={isPath ? text : undefined} style={{ background: 'rgba(255,255,255,0.06)' }}>{display}</code>
+                  },
+                  h1: ({ children }) => <h2 className="text-white font-semibold text-base mb-2">{children}</h2>,
+                  h2: ({ children }) => <h3 className="text-white font-semibold text-sm mb-2">{children}</h3>,
+                  h3: ({ children }) => <h4 className="text-white/90 font-medium text-sm mb-1">{children}</h4>,
+                }}
+              >
+                {(() => {
+                  const raw = modalPrompt.prompt
+                  const stripped = raw.trim().replace(/^```json\s*/m, '').replace(/```\s*$/m, '').trim()
+                  try {
+                    const obj = JSON.parse(stripped)
+                    if (obj.prompt) return obj.prompt
+                  } catch { /* not pure JSON */ }
+                  const start = raw.indexOf('{')
+                  const end = raw.lastIndexOf('}')
+                  if (start >= 0 && end > start) {
                     try {
-                      const obj = JSON.parse(stripped)
+                      const obj = JSON.parse(raw.slice(start, end + 1))
                       if (obj.prompt) return obj.prompt
-                    } catch { /* not pure JSON */ }
-                    const start = raw.indexOf('{')
-                    const end = raw.lastIndexOf('}')
-                    if (start >= 0 && end > start) {
-                      try {
-                        const obj = JSON.parse(raw.slice(start, end + 1))
-                        if (obj.prompt) return obj.prompt
-                      } catch { /* not valid JSON block */ }
-                    }
-                    return raw
-                  })()}
-                </Markdown>
-              </div>
+                    } catch { /* not valid JSON block */ }
+                  }
+                  return raw
+                })()}
+              </Markdown>
             </div>
           </div>
         </div>
-      )}
-    </div>
+      </div>
+    )}
+    </>
   )
 }

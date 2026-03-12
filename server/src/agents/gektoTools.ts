@@ -13,7 +13,7 @@ Given a plan abstract and project context, output a JSON array of task outlines.
 Each outline object must have:
 - "name": SHORT 2-4 word title, like a commit subject. Examples: "Add search bar", "Sidebar CRUD", "Drag-to-reorder", "TodoItem component", "Wire App state". NEVER more than 4 words. This is NOT a description — it's a label.
 - "description": what this task does (1-2 sentences)
-- "files": array of specific file paths to create/modify
+- "files": array of file paths prefixed with [create] or [edit], e.g. "[create] src/components/Foo.tsx" or "[edit] src/App.tsx"
 - "dependencies": array of 0-based indices of tasks this task depends on. Use [] for root tasks that can run immediately.
 
 Rules:
@@ -411,18 +411,33 @@ export async function generateTasksFromAbstract(
     const taskIds = outlines.map((_, i) => `${taskIdBase}_${i + 1}`)
 
     // Emit skeleton tasks immediately (with empty prompts) so UI shows them
-    const tasks: Task[] = outlines.map((outline, i) => ({
-      id: taskIds[i],
-      name: (outline.name || 'Task').slice(0, 30),
-      description: outline.description || outline.name || 'Task',
-      prompt: '', // filled in Phase 2
-      files: (outline.files || []).filter((f: string) => f && String(f).trim()),
-      status: 'pending' as const,
-      dependencies: (outline.dependencies || [])
-        .filter((idx: number) => idx >= 0 && idx < outlines.length && idx !== i)
-        .map((idx: number) => taskIds[idx]),
-      planId: plan.id,
-    }))
+    const tasks: Task[] = outlines.map((outline, i) => {
+      const rawFiles = (outline.files || []).filter((f: string) => f && String(f).trim())
+      const fileActions: Record<string, 'create' | 'edit'> = {}
+      const files = rawFiles.map((f: string) => {
+        const match = f.match(/^\[(create|edit)\]\s+(.+)$/)
+        if (match) {
+          const action = match[1] as 'create' | 'edit'
+          const path = match[2]
+          fileActions[path] = action
+          return path
+        }
+        return f
+      })
+      return {
+        id: taskIds[i],
+        name: (outline.name || 'Task').slice(0, 30),
+        description: outline.description || outline.name || 'Task',
+        prompt: '', // filled in Phase 2
+        files,
+        fileActions,
+        status: 'pending' as const,
+        dependencies: (outline.dependencies || [])
+          .filter((idx: number) => idx >= 0 && idx < outlines.length && idx !== i)
+          .map((idx: number) => taskIds[idx]),
+        planId: plan.id,
+      }
+    })
 
     // Notify UI of each skeleton task
     for (const task of tasks) {
