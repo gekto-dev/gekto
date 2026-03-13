@@ -214,7 +214,8 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
 
   // Track which agent's chat is open on whiteboard
   const [whiteboardChatAgentId, setWhiteboardChatAgentId] = useState<string | null>(null)
-  const [chatPosition, setChatPosition] = useState({ x: 0, y: 0 })
+  const chatPagePositionRef = useRef({ x: 0, y: 0 })
+  const chatContainerRef = useRef<HTMLDivElement>(null)
 
   // Track which agent's diff modal is open
   const [diffAgentId, setDiffAgentId] = useState<string | null>(null)
@@ -240,7 +241,7 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
   // Register callback for opening chat from TaskShape
   useEffect(() => {
     setOnOpenChat((agentId: string) => {
-      // Get shape position from tldraw
+      // Get shape position from tldraw — store in page coords so it scales with canvas
       if (editor) {
         const shapes = editor.getCurrentPageShapes()
         const shape = shapes.find(s =>
@@ -248,15 +249,17 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
           (s as any).props?.agentId === agentId
         )
         if (shape) {
-          // Convert page coords to screen coords
-          const screenPoint = editor.pageToScreen({ x: shape.x, y: shape.y })
-          setChatPosition({
-            x: screenPoint.x + 320, // Right of the task
-            y: screenPoint.y
-          })
+          // Use getShapePageBounds for correct coords when shape is inside a Frame
+          const pageBounds = editor.getShapePageBounds(shape)
+          if (pageBounds) {
+            chatPagePositionRef.current = {
+              x: pageBounds.x,
+              y: pageBounds.y,
+            }
+          }
         }
       }
-      setWhiteboardChatAgentId(agentId)
+      setWhiteboardChatAgentId(prev => prev === agentId ? null : agentId)
     })
     return () => setOnOpenChat(null)
   }, [editor])
@@ -288,6 +291,61 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
     })
     return () => setOnTitleChange(null)
   }, [agents, updateTask])
+
+  // Sync chat container position with canvas camera via rAF (constant size, tracks position)
+  useEffect(() => {
+    if (!editor || !whiteboardChatAgentId) return
+
+    let frame: number
+    const update = () => {
+      const el = chatContainerRef.current
+      if (el) {
+        const { x, y } = chatPagePositionRef.current
+        const screenPoint = editor.pageToScreen({ x, y })
+        const zoom = editor.getZoomLevel()
+        el.style.left = `${screenPoint.x}px`
+        el.style.top = `${screenPoint.y}px`
+        el.style.transform = `scale(${zoom})`
+      }
+      frame = requestAnimationFrame(update)
+    }
+    frame = requestAnimationFrame(update)
+
+    return () => cancelAnimationFrame(frame)
+  }, [editor, whiteboardChatAgentId])
+
+  // Forward wheel events from chat overlay to tldraw canvas (prevents page zoom)
+  useEffect(() => {
+    const el = chatContainerRef.current
+    if (!el) return
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const canvas = portalContainer?.querySelector('.tl-canvas')
+      if (canvas) {
+        canvas.dispatchEvent(new WheelEvent('wheel', {
+          deltaX: e.deltaX,
+          deltaY: e.deltaY,
+          deltaZ: e.deltaZ,
+          deltaMode: e.deltaMode,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          screenX: e.screenX,
+          screenY: e.screenY,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          bubbles: true,
+          cancelable: true,
+        }))
+      }
+    }
+
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [whiteboardChatAgentId, portalContainer])
 
   // Build agentsWithTasks array for sync hook (exclude master agent)
   const agentsWithTasks = useMemo(() =>
@@ -438,20 +496,26 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
         portalContainer
       )}
 
-      {/* Chat overlay - rendered in shadow DOM with high z-index to appear above whiteboard */}
+      {/* Chat on canvas — scales with zoom, tracks shape position */}
       {whiteboardChatAgentId && (
         <div
+          ref={chatContainerRef}
           className="fixed"
           style={{
-            left: chatPosition.x,
-            top: chatPosition.y,
+            transformOrigin: 'top left',
             zIndex: 100000,
             pointerEvents: 'auto',
           }}
         >
           <ChatWindow
             lizardId={whiteboardChatAgentId}
-            title="Agent Chat"
+            title={(() => {
+              if (!editor) return 'Agent Chat'
+              const shape = editor.getCurrentPageShapes().find(s =>
+                (s.type as string) === 'task' && (s as any).props?.agentId === whiteboardChatAgentId
+              )
+              return (shape as any)?.props?.title || 'Agent Chat'
+            })()}
             onClose={() => setWhiteboardChatAgentId(null)}
           />
         </div>
