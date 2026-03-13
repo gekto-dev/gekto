@@ -158,19 +158,15 @@ export function loadFromEntityStore(workingDir: string): GektoAppState | null {
     const agents = loadEntities<Agent>('agents')
     const fileChanges = loadEntities<FileChange & { id: string }>('file-changes')
 
-    // Load plan — pick the most recent active plan from plans/ dir
+    // Load all non-completed plans into activePlans
     const planFiles = fs.readdirSync(getEntityDir('plans')).filter(f => f.endsWith('.json'))
-    let plan: ExecutionPlan | null = null
-    const allPlans: ExecutionPlan[] = []
+    const activePlans: Record<string, ExecutionPlan> = {}
     for (const file of planFiles) {
       const p = readJson<ExecutionPlan>(path.join(getEntityDir('plans'), file))
-      if (p) allPlans.push(p)
+      if (p && p.status !== 'completed' && p.status !== 'failed') {
+        activePlans[p.id] = p
+      }
     }
-    // Prefer active plans (draft/executing/ready/generating_prompts), then most recent by ID
-    const activePlan = allPlans.find(p =>
-      p.status === 'draft' || p.status === 'executing' || p.status === 'ready' || p.status === 'generating_prompts' || p.status === 'prompts_ready'
-    )
-    plan = activePlan || allPlans.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null
 
     // Load singletons
     const personas = readSingleton<Persona[]>('personas')
@@ -234,7 +230,7 @@ export function loadFromEntityStore(workingDir: string): GektoAppState | null {
     }
 
     const state: GektoAppState = {
-      plan,
+      activePlans,
       tasks,
       agents: activeAgents,
       visuals: visuals || {},
@@ -294,26 +290,36 @@ export function persistMutation(mutationPath: string, value: unknown, state: Gek
       break
     }
 
-    case 'plan': {
-      if (value === null || value === undefined) {
-        // Plan removed — delete all plan files
-        const planDir = getEntityDir('plans')
-        try {
-          const files = fs.readdirSync(planDir).filter(f => f.endsWith('.json'))
-          for (const file of files) {
-            deleteFile(path.join(planDir, file))
-          }
-        } catch { /* ignore */ }
-      } else if (parts.length === 1) {
-        // Full plan object — skip transient 'planning' status (not a real plan yet)
-        const plan = value as ExecutionPlan
-        if (plan.status !== 'planning') {
-          persistEntity('plans', plan.id, plan)
+    case 'activePlans': {
+      if (parts.length === 1) {
+        // Full activePlans record replaced (e.g. cleared to {})
+        if (!value || (typeof value === 'object' && Object.keys(value as Record<string, unknown>).length === 0)) {
+          // Clear all plan files
+          const planDir = getEntityDir('plans')
+          try {
+            const files = fs.readdirSync(planDir).filter(f => f.endsWith('.json'))
+            for (const file of files) {
+              deleteFile(path.join(planDir, file))
+            }
+          } catch { /* ignore */ }
         }
-      } else {
-        // Sub-property update — write full plan
-        if (state.plan) {
-          persistEntity('plans', state.plan.id, state.plan)
+      } else if (parts.length >= 2) {
+        const planId = parts[1]
+        if (value === null || value === undefined) {
+          // Specific plan removed
+          deleteEntity('plans', planId)
+        } else if (parts.length === 2) {
+          // Full plan object — skip transient 'planning' status
+          const plan = value as ExecutionPlan
+          if (plan.status !== 'planning') {
+            persistEntity('plans', plan.id, plan)
+          }
+        } else {
+          // Sub-property update — write full plan from state
+          const plan = state.activePlans[planId]
+          if (plan) {
+            persistEntity('plans', planId, plan)
+          }
         }
       }
       break
@@ -383,11 +389,11 @@ export function rebuildOverview(state: GektoAppState): void {
     }
   }
 
-  if (state.plan) {
-    (overview.plans as Record<string, unknown>)[state.plan.id] = {
-      status: state.plan.status,
-      taskCount: state.plan.taskIds.length,
-      prompt: state.plan.originalPrompt,
+  for (const [planId, plan] of Object.entries(state.activePlans)) {
+    (overview.plans as Record<string, unknown>)[planId] = {
+      status: plan.status,
+      taskCount: plan.taskIds.length,
+      prompt: plan.originalPrompt,
     }
   }
 
@@ -433,9 +439,9 @@ export function persistFullState(state: GektoAppState): void {
     persistEntity('agents', id, agent)
   }
 
-  // Plan
-  if (state.plan) {
-    persistEntity('plans', state.plan.id, state.plan)
+  // Plans
+  for (const [id, plan] of Object.entries(state.activePlans)) {
+    persistEntity('plans', id, plan)
   }
 
   // File changes

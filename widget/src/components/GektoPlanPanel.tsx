@@ -341,7 +341,8 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   const [modalPrompt, setModalPrompt] = useState<Task | null>(null)
   const [diffAgentId, setDiffAgentId] = useState<string | null>(null)
   const [chatAgentId, setChatAgentId] = useState<string | null>(null)
-  const { currentPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, runAvailableTasks, removeTask } = useGekto()
+  const { currentPlan, activePlans, selectedPlanId, selectPlan, generateTasks, executePlan, buildPlan, cancelPlan, markTaskResolved, runTask, runAvailableTasks, removeTask } = useGekto()
+  const [showPlanList, setShowPlanList] = useState(false)
   const tasks = usePlanTasks()
   const { killAgent, revertFiles, acceptAgent } = useAgent()
   const agents = useStore((s) => s.agents)
@@ -426,14 +427,30 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-4 py-3"
+          className="flex items-center justify-between px-4 py-3 relative"
           style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}
         >
-          <div className="flex items-baseline gap-2 min-w-0 flex-1 mr-2">
+          <button
+            className="flex items-center gap-1.5 min-w-0 flex-1 mr-2 hover:opacity-80 transition-opacity cursor-pointer"
+            onClick={() => Object.keys(activePlans).length > 1 && setShowPlanList(prev => !prev)}
+            style={{ cursor: Object.keys(activePlans).length > 1 ? 'pointer' : 'default' }}
+          >
             <span className="text-white font-medium text-sm truncate">
               {currentPlan.title || 'Plan'}
             </span>
-          </div>
+            {Object.keys(activePlans).length > 1 && (
+              <svg
+                width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                className="shrink-0 transition-transform"
+                style={{
+                  color: 'rgba(255, 255, 255, 0.4)',
+                  transform: showPlanList ? 'rotate(180deg)' : 'rotate(0deg)',
+                }}
+              >
+                <path d="M2 3.5l3 3 3-3" />
+              </svg>
+            )}
+          </button>
           <div className="flex items-center gap-2">
             {showBuildButton && (
               <button
@@ -455,6 +472,45 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
               ✕
             </button>
           </div>
+
+          {/* Plans list dropdown */}
+          {showPlanList && (
+            <div
+              className="absolute left-0 top-full mt-1 w-full rounded-lg overflow-hidden"
+              style={{
+                background: 'rgb(40, 40, 50)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                zIndex: 10,
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+              }}
+            >
+              {Object.values(activePlans).map(plan => (
+                <button
+                  key={plan.id}
+                  onClick={() => {
+                    selectPlan(plan.id)
+                    setShowPlanList(false)
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-white/10"
+                  style={{
+                    color: plan.id === selectedPlanId ? 'rgb(134, 239, 172)' : 'rgba(255, 255, 255, 0.7)',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                  }}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{
+                      background: plan.status === 'executing' ? '#4ade80'
+                        : plan.status === 'completed' ? '#22c55e'
+                        : plan.status === 'failed' ? '#ef4444'
+                        : 'rgba(255, 255, 255, 0.3)',
+                    }}
+                  />
+                  <span className="truncate flex-1">{plan.title || plan.originalPrompt?.slice(0, 40) || plan.id}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Tab bar */}

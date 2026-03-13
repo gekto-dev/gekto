@@ -121,7 +121,7 @@ export interface ExecutionPlan {
 }
 
 export interface GektoAppState {
-  plan: ExecutionPlan | null
+  activePlans: Record<string, ExecutionPlan>
   tasks: Record<string, Task>
   agents: Record<string, Agent>
   visuals: Record<string, LizardVisual>
@@ -137,7 +137,7 @@ export interface GektoAppState {
 type Listener = () => void
 
 let currentState: GektoAppState = {
-  plan: null,
+  activePlans: {},
   tasks: {},
   agents: {},
   visuals: {},
@@ -203,13 +203,35 @@ function initWebSocket(): void {
     try {
       const msg = JSON.parse(event.data)
       switch (msg.type) {
-        case 'state_snapshot':
+        case 'state_snapshot': {
           snapshotReceived = true
-          setState(msg.state)
+          const snapshotState = msg.state
+          // Migrate old plan field to activePlans if needed
+          if (snapshotState.plan && !snapshotState.activePlans) {
+            snapshotState.activePlans = { [snapshotState.plan.id]: snapshotState.plan }
+            delete snapshotState.plan
+          }
+          if (!snapshotState.activePlans) {
+            snapshotState.activePlans = {}
+          }
+          setState(snapshotState)
           break
+        }
 
         case 'plan_set':
-          updateState(s => ({ ...s, plan: msg.plan }))
+          updateState(s => {
+            const newPlans = { ...s.activePlans }
+            if (msg.plan) {
+              newPlans[msg.planId] = msg.plan
+            } else {
+              delete newPlans[msg.planId]
+            }
+            return { ...s, activePlans: newPlans }
+          })
+          break
+
+        case 'active_plans_set':
+          updateState(s => ({ ...s, activePlans: msg.activePlans ?? {} }))
           break
 
         case 'task_set':

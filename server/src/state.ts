@@ -84,7 +84,7 @@ export interface LizardVisual {
 }
 
 export interface GektoAppState {
-  plan: ExecutionPlan | null
+  activePlans: Record<string, ExecutionPlan>
   tasks: Record<string, Task>
   agents: Record<string, Agent>
   visuals: Record<string, LizardVisual>
@@ -109,7 +109,7 @@ function createMasterId(): string {
 
 function createEmptyState(): GektoAppState {
   return {
-    plan: null,
+    activePlans: {},
     tasks: {},
     agents: {},
     visuals: {},
@@ -174,7 +174,7 @@ export function mutate(dotPath: string, value: unknown): void {
   setNestedValue(state as unknown as Record<string, unknown>, dotPath, value)
   persistMutation(dotPath, value, state)
   // Keep overview.json in sync for agent/plan/task changes
-  if (dotPath.startsWith('agents.') || dotPath.startsWith('plan') || dotPath.startsWith('tasks.')) {
+  if (dotPath.startsWith('agents.') || dotPath.startsWith('activePlans') || dotPath.startsWith('tasks.')) {
     rebuildOverview(state)
   }
 }
@@ -202,7 +202,7 @@ export function mutateBatch(mutations: Array<{ path: string; value: unknown }>):
   }
 
   // Keep overview.json in sync
-  if (mutations.some(m => m.path.startsWith('agents.') || m.path.startsWith('plan') || m.path.startsWith('tasks.'))) {
+  if (mutations.some(m => m.path.startsWith('agents.') || m.path.startsWith('activePlans') || m.path.startsWith('tasks.'))) {
     rebuildOverview(state)
   }
 }
@@ -244,9 +244,14 @@ export function broadcast(action: Record<string, unknown>): void {
   }
 }
 
-/** Broadcast the full plan object to all clients. */
-export function broadcastPlan(): void {
-  broadcast({ type: 'plan_set', plan: state.plan })
+/** Broadcast all active plans to all clients. */
+export function broadcastActivePlans(): void {
+  broadcast({ type: 'active_plans_set', activePlans: state.activePlans })
+}
+
+/** Broadcast a single plan (or deletion) to all clients. */
+export function broadcastSinglePlan(planId: string): void {
+  broadcast({ type: 'plan_set', planId, plan: state.activePlans[planId] ?? null })
 }
 
 /** Broadcast a single task (full object) to all clients. */
@@ -304,8 +309,12 @@ export function broadcastForPath(dotPath: string): void {
   const root = parts[0]
 
   switch (root) {
-    case 'plan':
-      broadcastPlan()
+    case 'activePlans':
+      if (parts[1]) {
+        broadcastSinglePlan(parts[1])
+      } else {
+        broadcastActivePlans()
+      }
       break
     case 'tasks':
       if (parts[1]) broadcastTask(parts[1])

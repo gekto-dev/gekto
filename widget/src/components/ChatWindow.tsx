@@ -92,6 +92,8 @@ export function ChatWindow({
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [isRestoredSession, setIsRestoredSession] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showPlansList, setShowPlansList] = useState(false)
+  const [confirmDeletePlanId, setConfirmDeletePlanId] = useState<string | null>(null)
   const [historySessions, setHistorySessions] = useState<Array<{ id: string; createdAt: string; preview: string; messageCount: number; isCurrent: boolean }>>([])
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const historyRef = useRef<HTMLDivElement>(null)
@@ -114,7 +116,7 @@ export function ChatWindow({
     resetAgent,
   } = useAgent()
 
-  const { createPlan, currentPlan, openPlanPanel, cancelPlan, markTaskInProgress } = useGekto()
+  const { createPlan, currentPlan, activePlans, selectedPlanId, isCreatingNewPlan, selectPlan, createNewPlan, openPlanPanel, cancelPlan, markTaskInProgress } = useGekto()
   const { state: serverState, send: sendToServer, isReady: serverReady } = useServerState()
   // Get agent/task names from global store
   const agents = useStore((s) => s.agents)
@@ -124,7 +126,8 @@ export function ChatWindow({
   const agentName = task?.name
 
   const isMaster = lizardId === MASTER_ID
-  const hasActivePlan = isMaster && currentPlan && currentPlan.status !== 'completed' && currentPlan.status !== 'failed' && currentPlan.status !== 'planning'
+  const activePlanCount = Object.values(activePlans).filter(p => p.status !== 'completed' && p.status !== 'failed').length
+  const hasActivePlan = isMaster && activePlanCount > 0
   const isGektoLoading = isMaster && gektoState === 'loading'
 
   // Rotating thinking phrases for master
@@ -1446,38 +1449,171 @@ export function ChatWindow({
             onChange={handleFileSelect}
           />
           <div className="flex items-center justify-between px-2 pb-2">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 min-w-0 flex-1">
               {isMaster && (
-                <>
+                <div className="flex items-center gap-1">
+                  {/* "+" button */}
                   <button
-                    onClick={openPlanPanel}
-                    disabled={!hasActivePlan}
-                    className="flex items-center gap-1 px-2 py-1 text-xs transition-all hover:bg-white/20 hover:border-white/30 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent rounded"
+                    onClick={() => {
+                      createNewPlan()
+                      setTimeout(() => textareaRef.current?.focus(), 50)
+                    }}
+                    className="flex items-center justify-center px-1.5 py-1 text-xs transition-all hover:bg-white/20 hover:border-white/30 cursor-pointer rounded"
                     style={{
                       background: 'rgba(255, 255, 255, 0.1)',
                       color: 'rgba(255, 255, 255, 0.7)',
                       border: '1px solid rgba(255, 255, 255, 0.15)',
                     }}
-                    title={hasActivePlan ? 'View active plan' : 'No active plan'}
+                    title="Create new plan"
                   >
-                    <FileTextIcon width={12} height={12} />
-                    <span>Plan</span>
+                    +
                   </button>
-                  {hasActivePlan && (
-                    <button
-                      onClick={cancelPlan}
-                      className="flex items-center justify-center w-5 h-5 text-xs transition-all hover:text-white/70"
+                  {/* "New plan" badge */}
+                  {isCreatingNewPlan && (
+                    <span
+                      className="flex items-center gap-1 px-2 py-1 text-xs rounded"
                       style={{
-                        background: 'transparent',
-                        color: 'rgba(255, 255, 255, 0.3)',
-                        border: 'none',
+                        background: 'rgba(74, 222, 128, 0.15)',
+                        color: 'rgb(134, 239, 172)',
+                        border: '1px solid rgba(74, 222, 128, 0.3)',
                       }}
-                      title="Cancel plan"
                     >
-                      ✕
-                    </button>
+                      <FileTextIcon width={12} height={12} />
+                      <span>New plan</span>
+                    </span>
                   )}
-                </>
+                  {/* "Plans (X)" button with dropdown */}
+                  {activePlanCount > 0 && (
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowPlansList(prev => !prev)}
+                        className="flex items-center gap-1 px-2 py-1 text-xs transition-all hover:bg-white/20 hover:border-white/30 cursor-pointer rounded"
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.1)',
+                          color: 'rgba(255, 255, 255, 0.7)',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        <FileTextIcon width={12} height={12} />
+                        <span>Plans ({activePlanCount})</span>
+                      </button>
+                      {/* Dropdown list — opens upward */}
+                      {showPlansList && (
+                        <>
+                          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setShowPlansList(false); setConfirmDeletePlanId(null) }} />
+                          <div
+                            className="absolute bottom-full left-0 mb-1 rounded-lg overflow-hidden"
+                            style={{
+                              background: 'rgb(40, 40, 50)',
+                              border: '1px solid rgba(255, 255, 255, 0.12)',
+                              zIndex: 9999,
+                              boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.4)',
+                              minWidth: 200,
+                              maxWidth: 300,
+                            }}
+                          >
+                            {Object.values(activePlans)
+                              .filter(p => p.status !== 'completed' && p.status !== 'failed')
+                              .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+                              .map(plan => {
+                                // Count task statuses for this plan
+                                const planTaskList = (plan.taskIds || []).map(id => serverState.tasks[id]).filter(Boolean)
+                                const running = planTaskList.filter(t => t.status === 'in_progress').length
+                                const pendingReview = planTaskList.filter(t => t.status === 'pending_testing').length
+                                const waiting = planTaskList.filter(t => t.status === 'pending').length
+                                const hasStats = running > 0 || pendingReview > 0 || waiting > 0
+
+                                return (
+                                <div
+                                  key={plan.id}
+                                  className="flex items-center"
+                                  style={{
+                                    height: 50,
+                                    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                                  }}
+                                >
+                                  {confirmDeletePlanId === plan.id ? (
+                                    <div className="flex items-center gap-2 px-3 py-2 w-full">
+                                      <span className="text-xs text-white/60 flex-1">Delete this plan?</span>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          selectPlan(plan.id)
+                                          cancelPlan()
+                                          setConfirmDeletePlanId(null)
+                                          if (activePlanCount <= 1) setShowPlansList(false)
+                                        }}
+                                        className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded hover:bg-red-400/10"
+                                      >
+                                        Yes
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); setConfirmDeletePlanId(null) }}
+                                        className="text-[10px] text-white/40 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/10"
+                                      >
+                                        No
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className="flex items-center gap-2 px-3 py-2 transition-colors hover:bg-white/10 cursor-pointer flex-1 min-w-0"
+                                      style={{
+                                        color: plan.id === selectedPlanId ? 'rgb(134, 239, 172)' : 'rgba(255, 255, 255, 0.7)',
+                                      }}
+                                      onClick={() => {
+                                        selectPlan(plan.id)
+                                        openPlanPanel()
+                                        setShowPlansList(false)
+                                      }}
+                                    >
+                                      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                                        <span className="truncate text-sm">{plan.title || plan.originalPrompt?.slice(0, 40) || plan.id}</span>
+                                        {hasStats && (
+                                          <div className="flex items-center gap-2 text-[10px]" style={{ color: 'rgba(255, 255, 255, 0.4)' }}>
+                                            {running > 0 && (
+                                              <span className="flex items-center gap-1">
+                                                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#facc15' }} />
+                                                {running} running
+                                              </span>
+                                            )}
+                                            {pendingReview > 0 && (
+                                              <span className="flex items-center gap-1">
+                                                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#4ade80' }} />
+                                                {pendingReview} review
+                                              </span>
+                                            )}
+                                            {waiting > 0 && (
+                                              <span className="flex items-center gap-1">
+                                                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#60a5fa' }} />
+                                                {waiting} waiting
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setConfirmDeletePlanId(plan.id)
+                                        }}
+                                        className="w-5 h-5 flex items-center justify-center transition-all hover:text-white/80 shrink-0 rounded"
+                                        style={{ color: 'rgba(255, 255, 255, 0.3)' }}
+                                        title="Remove plan"
+                                      >
+                                        <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                          <path d="M2 2l6 6M8 2l-6 6" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )})}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex items-center gap-2">

@@ -7,7 +7,7 @@ import { processWithTools, generateTasksFromAbstract, type PlanCallbacks, type T
 import type { ExecutionPlan, Task } from './types.js'
 import { randomUUID } from 'crypto'
 import { initGekto, getGektoState, abortGekto, setStateCallback, resetGektoSession, restoreGektoSession, getGektoSessionId } from './gektoPersistent.js'
-import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, getClients, broadcastPlan, broadcastTask, broadcastAgent, broadcastVisuals, broadcastVisualDelete, broadcastForPath, type Agent, type Message } from '../state.js'
+import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, getClients, broadcastActivePlans, broadcastSinglePlan, broadcastTask, broadcastAgent, broadcastVisuals, broadcastVisualDelete, broadcastForPath, type Agent, type Message } from '../state.js'
 import { persistEntity } from '../entityStore.js'
 import fs from 'fs'
 import nodePath from 'path'
@@ -203,10 +203,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               broadcastAgent(agentId)
               broadcastVisualDelete(agentId)
             }
-            // Clear tasks and plan
+            // Clear tasks and plans
             mutate('tasks', {})
-            mutate('plan', null)
-            broadcastPlan()
+            mutate('activePlans', {})
+            broadcastActivePlans()
             return
           }
 
@@ -313,10 +313,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 }
                 // Store plan + tasks atomically
                 mutateBatch([
-                  { path: 'plan', value: planResult.plan },
+                  { path: `activePlans.${planResult.plan.id}`, value: planResult.plan },
                   ...taskMutations,
                 ])
-                broadcastPlan()
+                broadcastSinglePlan(planResult.plan.id)
                 if (planResult.tasks) {
                   for (const task of planResult.tasks) {
                     broadcastTask(task.id)
@@ -342,9 +342,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               } else if (planResult.type === 'chat') {
                 // Chat reply — clear the temporary 'planning' plan state
                 const currentState = getState()
-                if (currentState.plan?.status === 'planning') {
-                  mutate('plan', null)
-                  broadcastPlan()
+                if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
+                  mutate(`activePlans.${msg.planId}`, undefined)
+                  broadcastSinglePlan(msg.planId)
                 }
               }
               // Persist Gekto session ID on current master so it survives restart
@@ -365,9 +365,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               }))
               // Clear stale planning state on error
               const currentState = getState()
-              if (currentState.plan?.status === 'planning') {
-                mutate('plan', null)
-                broadcastPlan()
+              if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
+                mutate(`activePlans.${msg.planId}`, undefined)
+                broadcastSinglePlan(msg.planId)
               }
               
               ws.send(JSON.stringify({ type: 'gekto_done', planId: msg.planId }))
@@ -378,8 +378,8 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
           case 'generate_tasks': {
             const currentState = getState()
-            const genPlan = currentState.plan
-            if (!genPlan || genPlan.id !== msg.planId) {
+            const genPlan = currentState.activePlans[msg.planId]
+            if (!genPlan) {
               ws.send(JSON.stringify({ type: 'error', message: 'Plan not found' }))
               return
             }
@@ -388,8 +388,8 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'working' }))
 
             // Update plan status
-            mutate('plan.status', 'generating_prompts')
-            broadcastPlan()
+            mutate(`activePlans.${msg.planId}.status`, 'generating_prompts')
+            broadcastSinglePlan(msg.planId)
 
             try {
               const requestId = Date.now()
@@ -410,10 +410,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   generatedTaskIds.add(task.id)
                   mutate(`tasks.${task.id}`, task)
                   if (isNew) {
-                    mutate('plan.taskIds', [...generatedTaskIds])
+                    mutate(`activePlans.${msg.planId}.taskIds`, [...generatedTaskIds])
                   }
                   broadcastTask(task.id)
-                  broadcastPlan()
+                  broadcastSinglePlan(msg.planId)
                   ws.send(JSON.stringify({
                     type: 'task_ready',
                     planId: msg.planId,
@@ -422,9 +422,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 },
                 onTasksGenerated: (tasks) => {
                   // Final: update plan status to ready
-                  mutate('plan.taskIds', [...generatedTaskIds])
-                  mutate('plan.status', 'prompts_ready')
-                  broadcastPlan()
+                  mutate(`activePlans.${msg.planId}.taskIds`, [...generatedTaskIds])
+                  mutate(`activePlans.${msg.planId}.status`, 'prompts_ready')
+                  broadcastSinglePlan(msg.planId)
 
                   ws.send(JSON.stringify({
                     type: 'tasks_generated',
@@ -439,8 +439,8 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                     message: `Error generating tasks: ${error}`,
                   }))
                   // Revert plan status to draft
-                  mutate('plan.status', 'draft')
-                  broadcastPlan()
+                  mutate(`activePlans.${msg.planId}.status`, 'draft')
+                  broadcastSinglePlan(msg.planId)
                 },
               }
 
@@ -452,8 +452,8 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 planId: msg.planId,
                 message: `Error generating tasks: ${err instanceof Error ? err.message : 'Failed'}`,
               }))
-              mutate('plan.status', 'draft')
-              broadcastPlan()
+              mutate(`activePlans.${msg.planId}.status`, 'draft')
+              broadcastSinglePlan(msg.planId)
             }
 
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'ready' }))
@@ -463,18 +463,18 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
           case 'execute_plan': {
             // Update plan status in server state
             const currentState = getState()
-            if (currentState.plan && currentState.plan.id === msg.planId) {
-              mutate('plan.status', 'executing')
-              broadcastPlan()
+            if (currentState.activePlans[msg.planId]) {
+              mutate(`activePlans.${msg.planId}.status`, 'executing')
+              broadcastSinglePlan(msg.planId)
             }
             return
           }
 
           case 'cancel_plan': {
             const currentState = getState()
-            if (currentState.plan && currentState.plan.id === msg.planId) {
-              mutate('plan', null)
-              broadcastPlan()
+            if (currentState.activePlans[msg.planId]) {
+              mutate(`activePlans.${msg.planId}`, undefined)
+              broadcastSinglePlan(msg.planId)
             }
             return
           }
@@ -628,19 +628,22 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               broadcastAgent(msg.agentId)
               broadcastVisualDelete(msg.agentId)
             }
-            // Check if all tasks in the plan are now completed
+            // Check if all tasks in the task's plan are now completed
             const state = getState()
-            if (state.plan) {
-              const allCompleted = state.plan.taskIds.every(id => {
+            const task = state.tasks[msg.taskId]
+            const taskPlanId = task?.planId
+            if (taskPlanId && state.activePlans[taskPlanId]) {
+              const plan = state.activePlans[taskPlanId]
+              const allCompleted = plan.taskIds.every(id => {
                 const t = state.tasks[id]
                 return t?.status === 'completed'
               })
               if (allCompleted) {
                 mutateBatch([
-                  { path: 'plan.status', value: 'completed' },
-                  { path: 'plan.completedAt', value: new Date().toISOString() },
+                  { path: `activePlans.${taskPlanId}.status`, value: 'completed' },
+                  { path: `activePlans.${taskPlanId}.completedAt`, value: new Date().toISOString() },
                 ])
-                broadcastPlan()
+                broadcastSinglePlan(taskPlanId)
               }
             }
             return
@@ -716,10 +719,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             const { sessionId: restoreId } = msg as { sessionId: string }
             const currentState = getState()
 
-            // Look for the agent in memory or on disk (archived agents have status 'done' and aren't loaded)
+            // Load agent from memory or disk
             let agentSession = currentState.agents[restoreId]
             if (!agentSession) {
-              // Try loading from disk (archived agents with status 'done' aren't in memory)
               try {
                 const filePath = nodePath.join(process.cwd(), '.gekto', 'agents', `${restoreId}.json`)
                 if (fs.existsSync(filePath)) {
@@ -729,27 +731,20 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             }
 
             if (agentSession?.messages) {
-              // Switch current master to the restored session
+              // Update server state
               mutate(`agents.${restoreId}`, { ...agentSession, status: 'idle' })
               mutate('currentMasterId', restoreId)
-              broadcastAgent(restoreId)
 
               if (agentSession.sessionId) {
                 restoreGektoSession(agentSession.sessionId)
               }
 
-              for (const client of getClients()) {
-                if (client.readyState === 1) {
-                  client.send(JSON.stringify({
-                    type: 'current_master_changed',
-                    currentMasterId: restoreId,
-                  }))
-                }
-              }
-
+              // Return messages directly — client sets them, no broadcast needed
               ws.send(JSON.stringify({
                 type: 'session_restored',
                 sessionId: restoreId,
+                currentMasterId: restoreId,
+                messages: agentSession.messages,
                 plan: null,
               }))
             } else {

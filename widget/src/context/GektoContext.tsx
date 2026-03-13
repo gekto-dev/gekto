@@ -20,8 +20,15 @@ interface GektoConfig {
 }
 
 interface GektoContextValue {
-  // Current plan (from server state)
+  // Current plan (selected plan from server state)
   currentPlan: ExecutionPlan | null
+
+  // Multiple plans support
+  activePlans: Record<string, ExecutionPlan>
+  selectedPlanId: string | null
+  isCreatingNewPlan: boolean
+  selectPlan: (planId: string) => void
+  createNewPlan: () => void
 
   // Configuration
   config: GektoConfig
@@ -84,11 +91,50 @@ export function GektoProvider({ children }: GektoProviderProps) {
   // Access SwarmContext for chat control
   const { openChat } = useSwarm()
 
-  // Server state — plan comes from here
+  // Server state — plans come from here
   const { state: serverState, send } = useServerState()
-  const currentPlan = serverState.plan
+  const activePlans = serverState.activePlans
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+  // When true, user clicked "+" to start a new plan — don't auto-select existing plans
+  const [isCreatingNewPlan, setIsCreatingNewPlan] = useState(false)
 
-  // Resolve tasks from plan.taskIds + state.tasks
+  // Derive current plan from selection
+  const currentPlan = useMemo(() => {
+    if (selectedPlanId && activePlans[selectedPlanId]) {
+      return activePlans[selectedPlanId]
+    }
+    return null
+  }, [selectedPlanId, activePlans])
+
+  // Auto-select: if selectedPlanId is stale (plan was deleted), pick the most recent active plan
+  // But don't auto-select if user is creating a new plan
+  useEffect(() => {
+    if (isCreatingNewPlan) return // user deliberately cleared selection
+    if (selectedPlanId && activePlans[selectedPlanId]) return // still valid
+    const planIds = Object.keys(activePlans)
+    if (planIds.length > 0) {
+      const sorted = planIds.sort((a, b) => {
+        const pa = activePlans[a]
+        const pb = activePlans[b]
+        return (pb.createdAt || '').localeCompare(pa.createdAt || '')
+      })
+      setSelectedPlanId(sorted[0])
+    } else {
+      setSelectedPlanId(null)
+    }
+  }, [selectedPlanId, activePlans, isCreatingNewPlan])
+
+  const selectPlan = useCallback((planId: string) => {
+    setSelectedPlanId(planId)
+    setIsCreatingNewPlan(false)
+  }, [])
+
+  const createNewPlan = useCallback(() => {
+    setSelectedPlanId(null)
+    setIsCreatingNewPlan(true)
+  }, [])
+
+  // Resolve tasks from currentPlan.taskIds + state.tasks
   const planTasks = useMemo((): Task[] => {
     if (!currentPlan) return []
     return (currentPlan.taskIds || [])
@@ -111,7 +157,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
       return
     }
 
-    // If there's already a plan in draft or ready state, we're modifying it
+    // If there's a selected plan in draft or ready state, we're modifying it
     const isModifyingPlan = currentPlan?.status === 'draft' || currentPlan?.status === 'ready'
     const planId = isModifyingPlan ? currentPlan.id : `plan_test_${Date.now()}`
 
@@ -170,7 +216,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
     // Update plan status to executing
-    send({ type: 'save_state', path: 'plan.status', value: 'executing' })
+    send({ type: 'save_state', path: `activePlans.${plan.id}.status`, value: 'executing' })
 
     // Notify server that execution started
     ws.send(JSON.stringify({
@@ -286,8 +332,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     // Add build task ID to plan
     const updatedTaskIds = [...(currentPlan.taskIds || []), taskId]
-    send({ type: 'save_state', path: 'plan.taskIds', value: updatedTaskIds })
-    send({ type: 'save_state', path: 'plan.status', value: 'executing' })
+    send({ type: 'save_state', path: `activePlans.${currentPlan.id}.taskIds`, value: updatedTaskIds })
+    send({ type: 'save_state', path: `activePlans.${currentPlan.id}.status`, value: 'executing' })
 
     // Send prompt to worker with task context
     setTimeout(() => {
@@ -315,9 +361,16 @@ export function GektoProvider({ children }: GektoProviderProps) {
       }))
     }
 
-    send({ type: 'save_state', path: 'plan', value: null })
-    setIsPlanPanelOpen(false)
-  }, [currentPlan, getWebSocket, send])
+    send({ type: 'save_state', path: `activePlans.${currentPlan.id}`, value: undefined })
+    // Auto-select another plan if any remain
+    const remaining = Object.keys(activePlans).filter(id => id !== currentPlan.id)
+    if (remaining.length > 0) {
+      setSelectedPlanId(remaining[0])
+    } else {
+      setSelectedPlanId(null)
+      setIsPlanPanelOpen(false)
+    }
+  }, [currentPlan, activePlans, getWebSocket, send])
 
   // Get status of a specific task
   const getTaskStatus = useCallback((taskId: string): TaskStatus | undefined => {
@@ -350,7 +403,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     // Remove task from plan.taskIds
     if (plan) {
       const remainingIds = plan.taskIds.filter(id => id !== taskId)
-      send({ type: 'save_state', path: 'plan.taskIds', value: remainingIds })
+      send({ type: 'save_state', path: `activePlans.${plan.id}.taskIds`, value: remainingIds })
     }
 
     // Delete task state
@@ -422,7 +475,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     // Update plan status
     if (currentPlan.status === 'ready' || currentPlan.status === 'prompts_ready') {
-      send({ type: 'save_state', path: 'plan.status', value: 'executing' })
+      send({ type: 'save_state', path: `activePlans.${currentPlan.id}.status`, value: 'executing' })
     }
 
     // Send prompt to worker with task context
@@ -470,7 +523,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     // Update plan status if needed
     if (plan.status === 'prompts_ready') {
-      send({ type: 'save_state', path: 'plan.status', value: 'executing' })
+      send({ type: 'save_state', path: `activePlans.${plan.id}.status`, value: 'executing' })
     }
 
     const assignments: { taskId: string; agentId: string; prompt: string; description: string; files: string[] }[] = []
@@ -569,26 +622,30 @@ export function GektoProvider({ children }: GektoProviderProps) {
     timing?: { classifyMs?: number; workMs?: number }
   }) => {
     switch (msg.type) {
-      case 'planning_started':
+      case 'planning_started': {
         // Set temporary planning state — panel will open when plan_created arrives
-        // Don't overwrite existing draft plans being modified
-        if (!currentPlan || currentPlan.status === 'completed' || currentPlan.status === 'failed') {
+        const planId = msg.planId!
+        const existingPlan = activePlans[planId]
+        if (!existingPlan || existingPlan.status === 'completed' || existingPlan.status === 'failed') {
           send({
             type: 'save_state',
-            path: 'plan',
+            path: `activePlans.${planId}`,
             value: {
-              id: msg.planId,
+              id: planId,
               status: 'planning',
               originalPrompt: msg.prompt ?? '',
               taskIds: [],
               createdAt: new Date().toISOString(),
             },
           })
-        } else if (currentPlan.status === 'draft') {
-          // Keep existing plan data, just mark as planning
-          send({ type: 'save_state', path: 'plan.status', value: 'planning' })
+        } else if (existingPlan.status === 'draft') {
+          send({ type: 'save_state', path: `activePlans.${planId}.status`, value: 'planning' })
         }
+        // Auto-select this plan
+        setSelectedPlanId(planId)
+        setIsCreatingNewPlan(false)
         break
+      }
 
       case 'gekto_text':
         // Server sends accumulated text per block — use requestId + blockIndex for unique IDs
@@ -706,6 +763,10 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
       case 'plan_created':
         // Plan data arrives via plan_set action in useServerState — just open the panel
+        if (msg.planId) {
+          setSelectedPlanId(msg.planId)
+          setIsCreatingNewPlan(false)
+        }
         setIsPlanPanelOpen(true)
         break
 
@@ -714,7 +775,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
         // Plan status already set to prompts_ready by server
         break
     }
-  }, [currentPlan, send])
+  }, [activePlans, send])
 
   // Handle task completion from worker agents
   const handleTaskComplete = useCallback((agentId: string, result: string, isError: boolean) => {
@@ -722,16 +783,17 @@ export function GektoProvider({ children }: GektoProviderProps) {
     const ws = getWebSocket()
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
-    const plan = currentPlanRef.current
-    const tasks = planTasksRef.current
-    if (!plan) return
-
-    const task = tasks.find(t => t.assignedAgentId === agentId)
+    // Find the task across all tasks (not just the selected plan)
+    const allTasks = Object.values(serverState.tasks)
+    const task = allTasks.find(t => t.assignedAgentId === agentId)
     if (!task) return
+
+    const planId = task.planId
+    if (!planId) return
 
     ws.send(JSON.stringify({
       type: isError ? 'task_failed' : 'task_completed',
-      planId: plan.id,
+      planId,
       taskId: task.id,
       result: isError ? undefined : result,
       error: isError ? result : undefined,
@@ -739,7 +801,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     // Dependent tasks become "ready" when all deps are done (pending_testing/completed).
     // Auto-run effect will pick them up and dispatch automatically.
-  }, [getWebSocket, sendMessage, send])
+  }, [getWebSocket, serverState.tasks])
 
   // Clean dispatched tracking when tasks leave 'pending' state (enables re-dispatch after retry)
   useEffect(() => {
@@ -756,8 +818,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
     dispatchedTaskIdsRef.current.clear()
   }, [currentPlan?.id])
 
-  // Auto-run available tasks when plan is executing and new tasks become available
+  // Auto-run available tasks when any plan is executing and new tasks become available
   useEffect(() => {
+    // Run for the selected plan
     const plan = currentPlanRef.current
     if (!plan || plan.status !== 'executing') return
     runAvailableTasks()
@@ -792,6 +855,11 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
   const value = useMemo<GektoContextValue>(() => ({
     currentPlan,
+    activePlans,
+    selectedPlanId,
+    isCreatingNewPlan,
+    selectPlan,
+    createNewPlan,
     config,
     directMode,
     setDirectMode,
@@ -814,6 +882,11 @@ export function GektoProvider({ children }: GektoProviderProps) {
     closePlanPanel,
   }), [
     currentPlan,
+    activePlans,
+    selectedPlanId,
+    isCreatingNewPlan,
+    selectPlan,
+    createNewPlan,
     config,
     directMode,
     createPlan,
@@ -842,7 +915,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
   )
 }
 
-export type { ExecutionPlan, Task, TaskStatus, PlanStatus, GektoConfig }
+export type { ExecutionPlan, Task, TaskStatus, PlanStatus, GektoConfig, GektoContextValue }
 
 // Also export planTasks resolver for components that need resolved tasks
 export function usePlanTasks(): Task[] {
