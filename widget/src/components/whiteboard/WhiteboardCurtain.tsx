@@ -93,6 +93,38 @@ function CustomContextMenu() {
   )
 }
 
+// Line grid component — replaces tldraw's default dot grid
+function LineGrid({ x, y, z, size }: { x: number; y: number; z: number; size: number }) {
+  const step = size * z * 4
+  if (step < 4) return null
+
+  const offsetX = (x * z) % step
+  const offsetY = (y * z) % step
+  const opacity = Math.min(1, (step - 4) / 8) * 0.1
+
+  return (
+    <svg
+      className="tl-grid"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+    >
+      <defs>
+        <pattern
+          id="grid-lines"
+          x={offsetX}
+          y={offsetY}
+          width={step}
+          height={step}
+          patternUnits="userSpaceOnUse"
+        >
+          <line x1={0} y1={0} x2={step} y2={0} stroke={`rgba(74, 222, 128, ${opacity})`} strokeWidth={1} />
+          <line x1={0} y1={0} x2={0} y2={step} stroke={`rgba(74, 222, 128, ${opacity})`} strokeWidth={1} />
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#grid-lines)" />
+    </svg>
+  )
+}
+
 // Floating input below selected frame — uses tldraw's InFrontOfTheCanvas + useValue for reactivity
 function SelectedFrameInput() {
   const editor = useEditor()
@@ -478,10 +510,12 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
               whiteboardEditor = newEditor
               setEditor(newEditor)
               newEditor.user.updateUserPreferences({ colorScheme: 'dark' })
+              newEditor.updateInstanceState({ isGridMode: true })
             }}
             components={{
               Toolbar: () => <CustomToolbar onAddTask={handleAddTask} onAddIframe={handleAddIframe} />,
               ContextMenu: CustomContextMenu,
+              Grid: LineGrid,
               InFrontOfTheCanvas: SelectedFrameInput,
               ActionsMenu: null,
               HelpMenu: null,
