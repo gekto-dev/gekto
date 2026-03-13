@@ -156,6 +156,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
   const planTasksRef = useRef(planTasks)
   planTasksRef.current = planTasks
 
+  // Track dispatched task IDs to prevent double-dispatch (send() is async WebSocket round-trip)
+  const dispatchedTaskIdsRef = useRef(new Set<string>())
+
   // Execute the current plan
   const executePlan = useCallback(async () => {
     const plan = currentPlanRef.current
@@ -454,10 +457,16 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     const available = tasks.filter(task => {
       if (task.status !== 'pending') return false
+      if (dispatchedTaskIdsRef.current.has(task.id)) return false
       return task.dependencies.every(depId => doneTaskIds.has(depId))
     })
 
     if (!available.length) return
+
+    // Mark as dispatched before sending to prevent double-dispatch
+    for (const task of available) {
+      dispatchedTaskIdsRef.current.add(task.id)
+    }
 
     // Update plan status if needed
     if (plan.status === 'prompts_ready') {
@@ -728,9 +737,31 @@ export function GektoProvider({ children }: GektoProviderProps) {
       error: isError ? result : undefined,
     }))
 
-    // Dependent tasks become "ready" when all deps are approved (completed),
-    // but they do NOT auto-run — the user must manually start them.
+    // Dependent tasks become "ready" when all deps are done (pending_testing/completed).
+    // Auto-run effect will pick them up and dispatch automatically.
   }, [getWebSocket, sendMessage, send])
+
+  // Clean dispatched tracking when tasks leave 'pending' state (enables re-dispatch after retry)
+  useEffect(() => {
+    for (const taskId of dispatchedTaskIdsRef.current) {
+      const task = serverState.tasks[taskId]
+      if (task && task.status !== 'pending') {
+        dispatchedTaskIdsRef.current.delete(taskId)
+      }
+    }
+  }, [serverState.tasks])
+
+  // Reset dispatched tracking when plan changes
+  useEffect(() => {
+    dispatchedTaskIdsRef.current.clear()
+  }, [currentPlan?.id])
+
+  // Auto-run available tasks when plan is executing and new tasks become available
+  useEffect(() => {
+    const plan = currentPlanRef.current
+    if (!plan || plan.status !== 'executing') return
+    runAvailableTasks()
+  }, [planTasks, runAvailableTasks])
 
   // Expose handlers for AgentContext to call via window
   useEffect(() => {
