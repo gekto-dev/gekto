@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { useAgent, useAgentMessageListener, type Message } from '../context/AgentContext'
 import { useGekto } from '../context/GektoContext'
 import { useStore } from '../store/store'
-import { useServerState, getServerState, updateLocalAgentMessages } from '../hooks/useServerState'
+import { useServerState, getServerState, updateLocalAgentMessages, updateLocalCurrentMasterId } from '../hooks/useServerState'
 
 const MASTER_ID = 'master'
 const CHAT_SIZE_KEY = 'gekto-chat-size'
@@ -248,6 +248,7 @@ export function ChatWindow({
   useEffect(() => {
     if (prevResolvedRef.current !== resolvedMasterId) {
       prevResolvedRef.current = resolvedMasterId
+      setMessages([])
       setHistoryLoaded(false)
     }
   }, [resolvedMasterId])
@@ -704,6 +705,12 @@ export function ChatWindow({
         })),
       }))
     }
+
+    // Clear plan and text input when clearing master chat
+    if (isMaster) {
+      cancelPlan()
+      setInputValue('')
+    }
   }
 
   // History panel: fetch sessions list and handle restore
@@ -733,12 +740,29 @@ export function ChatWindow({
 
   const handleRestoreSession = (sessionId: string) => {
     const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'restore_gekto_session', sessionId }))
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+    const handler = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'session_restored' && data.sessionId === sessionId) {
+          ws.removeEventListener('message', handler)
+          // Put messages into server state, then update currentMasterId.
+          // The resolvedMasterId change triggers the reset effect → loading effect
+          // which picks up these messages from serverState.
+          if (data.messages) {
+            updateLocalAgentMessages(data.currentMasterId, data.messages)
+          }
+          updateLocalCurrentMasterId(data.currentMasterId)
+        }
+      } catch { /* ignore */ }
     }
+    ws.addEventListener('message', handler)
+    setTimeout(() => ws.removeEventListener('message', handler), 5000)
+
+    ws.send(JSON.stringify({ type: 'restore_gekto_session', sessionId }))
     setShowHistory(false)
     setIsRestoredSession(true)
-    // historyLoaded resets automatically when resolvedMasterId changes via server response
   }
 
   const handleDeleteSession = (sessionId: string) => {
@@ -926,7 +950,7 @@ export function ChatWindow({
           </div>
         </div>
         <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-          {isMaster && (
+          {isMaster && false && (
             <div className="relative" ref={historyRef}>
               <button
                 onClick={handleToggleHistory}

@@ -110,6 +110,7 @@ export type ExecutionPlanStatus = 'planning' | 'draft' | 'ready' | 'generating_p
 export interface ExecutionPlan {
   id: string
   status: ExecutionPlanStatus
+  title?: string
   originalPrompt: string
   abstract?: string
   reasoning?: string

@@ -429,11 +429,10 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           className="flex items-center justify-between px-4 py-3"
           style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}
         >
-          <div className="flex items-baseline gap-2">
-            <span className="text-white font-medium text-sm">Plan</span>
-            {isDraft && (
-              <span className="text-xs text-white/40">Draft</span>
-            )}
+          <div className="flex items-baseline gap-2 min-w-0 flex-1 mr-2">
+            <span className="text-white font-medium text-sm truncate">
+              {currentPlan.title || 'Plan'}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             {showBuildButton && (

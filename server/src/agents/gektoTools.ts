@@ -64,6 +64,7 @@ interface ExistingPlanContext {
 interface GektoStructuredOutput {
   action: 'create_plan' | 'reply' | 'clarify' | 'remove_agents' | 'update_plan'
   message?: string
+  title?: string
   abstract?: string
   buildPrompt?: string
   target?: string
@@ -186,6 +187,7 @@ The user's message above is a modification request. Respond with "update_plan" a
       const plan: ExecutionPlan = {
         id: planId,
         status: 'draft',
+        title: parsed.title,
         originalPrompt: prompt,
         abstract: parsed.abstract || parsed.message || '',
         buildPrompt: parsed.buildPrompt,
