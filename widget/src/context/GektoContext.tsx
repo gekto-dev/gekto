@@ -157,8 +157,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
       return
     }
 
-    // If there's a selected plan in draft or ready state, we're modifying it
-    const isModifyingPlan = currentPlan?.status === 'draft' || currentPlan?.status === 'ready'
+    // If there's a selected plan that isn't finished, we're modifying it
+    const isModifyingPlan = currentPlan && currentPlan.status !== 'completed' && currentPlan.status !== 'failed' && currentPlan.status !== 'planning'
     const planId = isModifyingPlan ? currentPlan.id : `plan_test_${Date.now()}`
 
     // Include current agents so server knows what exists

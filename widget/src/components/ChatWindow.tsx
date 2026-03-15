@@ -1100,7 +1100,7 @@ export function ChatWindow({
                       <span
                         style={{
                           color: isRunning ? '#86efac' : 'rgba(255, 255, 255, 0.4)',
-                          fontSize: '12px',
+                          fontSize: '8px',
                           fontWeight: 700,
                           animation: isRunning ? 'blink-triangle 1.2s ease-in-out infinite' : 'none',
                         }}
@@ -1189,7 +1189,7 @@ export function ChatWindow({
             {/* System message */}
             {message.sender === 'system' ? (
               <div className="flex items-center gap-2 py-1">
-                <span style={{ color: '#4ade80', fontSize: '14px' }}>◆</span>
+                <span style={{ color: '#4ade80', fontSize: '8px' }}>◆</span>
                 <span className="font-mono text-xs" style={{ color: 'rgba(134, 239, 172, 0.6)' }}>{message.text}</span>
               </div>
             ) : (
@@ -1351,7 +1351,7 @@ export function ChatWindow({
         {agentState === 'working' && !permissionRequest && !currentTool && (
           <div className="flex justify-start">
             <div className="flex items-center gap-2 py-1">
-              <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+              <span style={{ color: '#4ade80', fontSize: '8px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
               <span className="tool-call-text font-mono text-xs">
                 {isMaster ? THINKING_PHRASES[masterPhraseIndex] : AGENT_PHRASES[agentPhraseIndex]}
               </span>
@@ -1363,7 +1363,7 @@ export function ChatWindow({
         {isMaster && currentPlan && (currentPlan.status === 'planning' || currentPlan.status === 'generating_prompts') && agentState !== 'working' && (
           <div className="flex justify-start">
             <div className="flex items-center gap-2 py-1">
-              <span style={{ color: '#4ade80', fontSize: '14px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
+              <span style={{ color: '#4ade80', fontSize: '8px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
               <span className="tool-call-text font-mono text-xs">
                 {currentPlan.status === 'planning' ? 'Writing plan abstract' : 'Generating tasks'}
               </span>

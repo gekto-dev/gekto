@@ -223,15 +223,45 @@ export function loadFromEntityStore(workingDir: string): GektoAppState | null {
       currentMasterId = `master_${Date.now()}`
     }
 
+    // Clean up: mark non-current master agents as done so they don't pollute memory
+    for (const [id, agent] of Object.entries(activeAgents)) {
+      if (id.startsWith('master_') && id !== currentMasterId) {
+        // Mark as done on disk and remove from active set
+        persistEntity('agents', id, {
+          ...agent,
+          status: 'done',
+          completedAt: agent.completedAt || new Date().toISOString(),
+        })
+        delete activeAgents[id]
+      }
+    }
+
     // Persist so next restart doesn't need to re-detect
     if (currentMasterId !== savedMasterId) {
       const existingSettings = (settings as Record<string, unknown>) || {}
       persistSingleton('settings', { ...existingSettings, currentMasterId })
     }
 
+    // Clean up orphaned tasks — only keep tasks referenced by active plans
+    const activePlanTaskIds = new Set<string>()
+    for (const plan of Object.values(activePlans)) {
+      for (const taskId of plan.taskIds) {
+        activePlanTaskIds.add(taskId)
+      }
+    }
+    const activeTasks: Record<string, Task> = {}
+    for (const [id, task] of Object.entries(tasks)) {
+      if (activePlanTaskIds.has(id)) {
+        activeTasks[id] = task
+      } else {
+        // Remove orphaned task file from disk
+        deleteEntity('tasks', id)
+      }
+    }
+
     const state: GektoAppState = {
       activePlans,
-      tasks,
+      tasks: activeTasks,
       agents: activeAgents,
       visuals: visuals || {},
       chats: {},
@@ -259,7 +289,16 @@ export function persistMutation(mutationPath: string, value: unknown, state: Gek
 
   switch (topLevel) {
     case 'tasks': {
-      if (parts.length >= 2) {
+      if (parts.length === 1) {
+        // Bulk clear — delete all task files from disk
+        const taskDir = getEntityDir('tasks')
+        try {
+          const files = fs.readdirSync(taskDir).filter(f => f.endsWith('.json'))
+          for (const file of files) {
+            deleteFile(path.join(taskDir, file))
+          }
+        } catch { /* ignore */ }
+      } else if (parts.length >= 2) {
         const taskId = parts[1]
         if (value === undefined) {
           deleteEntity('tasks', taskId)
@@ -279,7 +318,15 @@ export function persistMutation(mutationPath: string, value: unknown, state: Gek
       if (parts.length >= 2) {
         const agentId = parts[1]
         if (value === undefined) {
-          // Don't delete agent files — soft-deleted agents keep their history on disk
+          // Soft-delete: update file on disk with 'done' status (don't delete)
+          const existing = readJson<Agent>(getEntityPath('agents', agentId))
+          if (existing && existing.status !== 'done') {
+            persistEntity('agents', agentId, {
+              ...existing,
+              status: 'done',
+              completedAt: existing.completedAt || new Date().toISOString(),
+            })
+          }
         } else if (parts.length === 2) {
           persistEntity('agents', agentId, value)
         } else {
@@ -369,31 +416,71 @@ export function persistMutation(mutationPath: string, value: unknown, state: Gek
 /** Rebuild overview.json from current state */
 export function rebuildOverview(state: GektoAppState): void {
   const overview: Record<string, unknown> = {
+    currentMasterId: state.currentMasterId,
     agents: {} as Record<string, unknown>,
     tasks: {} as Record<string, unknown>,
     plans: {} as Record<string, unknown>,
+    fileChanges: {} as Record<string, unknown>,
   }
 
   for (const [id, agent] of Object.entries(state.agents)) {
+    // Skip archived master sessions — they're not visible on the whiteboard
+    if (agent.status === 'done' && id.startsWith('master_')) continue
     (overview.agents as Record<string, unknown>)[id] = {
       status: agent.status,
       taskId: agent.taskId,
+      planId: agent.planId,
+      personaId: agent.personaId,
+      createdAt: agent.createdAt,
+      completedAt: agent.completedAt,
+      fileChangeCount: agent.fileChanges?.length ?? 0,
+    }
+  }
+
+  // Collect task IDs referenced by active plans
+  const activePlanTaskIds = new Set<string>()
+  for (const plan of Object.values(state.activePlans)) {
+    for (const taskId of plan.taskIds) {
+      activePlanTaskIds.add(taskId)
     }
   }
 
   for (const [id, task] of Object.entries(state.tasks)) {
-    (overview.tasks as Record<string, unknown>)[id] = {
+    // Only include tasks that belong to an active plan
+    if (!activePlanTaskIds.has(id)) continue
+    const entry: Record<string, unknown> = {
       name: task.name,
       status: task.status,
+      description: task.description,
       assignedAgentId: task.assignedAgentId,
+      planId: task.planId,
+      dependencies: task.dependencies,
+      files: task.files,
     }
+    if (task.error) entry.error = task.error
+    if (task.result) { const r: string = task.result; entry.result = r.slice(0, 200) }  // truncate
+    (overview.tasks as Record<string, unknown>)[id] = entry
   }
 
   for (const [planId, plan] of Object.entries(state.activePlans)) {
     (overview.plans as Record<string, unknown>)[planId] = {
       status: plan.status,
+      title: plan.title,
       taskCount: plan.taskIds.length,
+      taskIds: plan.taskIds,
       prompt: plan.originalPrompt,
+      createdAt: plan.createdAt,
+      completedAt: (plan as unknown as Record<string, unknown>).completedAt,
+    }
+  }
+
+  for (const [encodedPath, fc] of Object.entries(state.fileChanges)) {
+    (overview.fileChanges as Record<string, unknown>)[encodedPath] = {
+      tool: fc.tool,
+      filePath: fc.filePath,
+      agentId: fc.agentId,
+      taskId: fc.taskId,
+      timestamp: fc.timestamp,
     }
   }
 

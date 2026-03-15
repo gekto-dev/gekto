@@ -213,6 +213,12 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
           case 'create_plan': {
             // Set master lizard to working state
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'working' }))
+            {
+              const masterId = getState().currentMasterId
+              if (getState().agents[masterId]) {
+                mutate(`agents.${masterId}.status`, 'working')
+              }
+            }
 
             // Save attached images to temp files
             const planImages = msg.images as string[] | undefined
@@ -304,6 +310,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               }))
 
               if (planResult.type === 'build' && planResult.plan) {
+                // Clean up old tasks when updating an existing plan
+                const existingPlan = getState().activePlans[planResult.plan.id]
+                if (existingPlan?.taskIds?.length) {
+                  for (const oldTaskId of existingPlan.taskIds) {
+                    mutate(`tasks.${oldTaskId}`, undefined)
+                    broadcastTask(oldTaskId)
+                  }
+                }
+
                 // Store tasks separately in server state
                 const taskMutations: Array<{ path: string; value: unknown }> = []
                 if (planResult.tasks) {
@@ -330,7 +345,16 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 }))
               } else if (planResult.type === 'remove' && planResult.removedAgents) {
                 // Remove agents from server state
+                const currentState = getState()
                 for (const agentId of planResult.removedAgents) {
+                  const agentToRemove = currentState.agents[agentId]
+                  if (agentToRemove) {
+                    persistEntity('agents', agentId, {
+                      ...agentToRemove,
+                      status: 'done',
+                      completedAt: new Date().toISOString(),
+                    })
+                  }
                   mutate(`agents.${agentId}`, undefined)
                   broadcastAgent(agentId)
                 }
@@ -356,6 +380,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               // Signal master finalize so client stops streaming animations
               ws.send(JSON.stringify({ type: 'gekto_done', planId: msg.planId }))
               ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'ready' }))
+              {
+                const mid = getState().currentMasterId
+                if (getState().agents[mid]) mutate(`agents.${mid}.status`, 'idle')
+              }
             } catch (err) {
               console.error('[Agent] Gekto processing failed:', err)
               ws.send(JSON.stringify({
@@ -369,9 +397,13 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 mutate(`activePlans.${msg.planId}`, undefined)
                 broadcastSinglePlan(msg.planId)
               }
-              
+
               ws.send(JSON.stringify({ type: 'gekto_done', planId: msg.planId }))
               ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'ready' }))
+              {
+                const mid = getState().currentMasterId
+                if (getState().agents[mid]) mutate(`agents.${mid}.status`, 'idle')
+              }
             }
             return
           }
@@ -386,6 +418,19 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
             // Set master to working while generating
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'working' }))
+            {
+              const mid = currentState.currentMasterId
+              if (currentState.agents[mid]) mutate(`agents.${mid}.status`, 'working')
+            }
+
+            // Clean up old tasks before regenerating
+            if (genPlan.taskIds?.length) {
+              for (const oldTaskId of genPlan.taskIds) {
+                mutate(`tasks.${oldTaskId}`, undefined)
+                broadcastTask(oldTaskId)
+              }
+              mutate(`activePlans.${msg.planId}.taskIds`, [])
+            }
 
             // Update plan status
             mutate(`activePlans.${msg.planId}.status`, 'generating_prompts')
@@ -457,6 +502,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             }
 
             ws.send(JSON.stringify({ type: 'state', lizardId: 'master', state: 'ready' }))
+            {
+              const mid = getState().currentMasterId
+              if (getState().agents[mid]) mutate(`agents.${mid}.status`, 'idle')
+            }
             return
           }
 
@@ -472,7 +521,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
 
           case 'cancel_plan': {
             const currentState = getState()
-            if (currentState.activePlans[msg.planId]) {
+            const cancelPlan = currentState.activePlans[msg.planId]
+            if (cancelPlan) {
+              // Clean up tasks belonging to this plan
+              if (cancelPlan.taskIds?.length) {
+                for (const taskId of cancelPlan.taskIds) {
+                  mutate(`tasks.${taskId}`, undefined)
+                  broadcastTask(taskId)
+                }
+              }
               mutate(`activePlans.${msg.planId}`, undefined)
               broadcastSinglePlan(msg.planId)
             }
@@ -547,25 +604,39 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
           // Task completion reported by client
           case 'task_completed': {
             if (msg.taskId) {
+              const taskState = getState().tasks[msg.taskId]
+              const agentId = taskState?.assignedAgentId
               const mutations: Array<{ path: string; value: unknown }> = [
                 { path: `tasks.${msg.taskId}.status`, value: 'pending_testing' },
               ]
               if (msg.result) {
                 mutations.push({ path: `tasks.${msg.taskId}.result`, value: msg.result })
               }
+              if (agentId && getState().agents[agentId]) {
+                mutations.push({ path: `agents.${agentId}.status`, value: 'done' })
+                mutations.push({ path: `agents.${agentId}.completedAt`, value: new Date().toISOString() })
+              }
               mutateBatch(mutations)
               broadcastTask(msg.taskId)
+              if (agentId) broadcastAgent(agentId)
             }
             return
           }
 
           case 'task_failed': {
             if (msg.taskId) {
-              mutateBatch([
+              const taskState = getState().tasks[msg.taskId]
+              const agentId = taskState?.assignedAgentId
+              const mutations: Array<{ path: string; value: unknown }> = [
                 { path: `tasks.${msg.taskId}.status`, value: 'failed' },
                 { path: `tasks.${msg.taskId}.error`, value: msg.error },
-              ])
+              ]
+              if (agentId && getState().agents[agentId]) {
+                mutations.push({ path: `agents.${agentId}.status`, value: 'error' })
+              }
+              mutateBatch(mutations)
               broadcastTask(msg.taskId)
+              if (agentId) broadcastAgent(agentId)
             }
             return
           }
@@ -623,6 +694,14 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             }
             // Remove linked agent
             if (msg.agentId) {
+              const agentToResolve = getState().agents[msg.agentId]
+              if (agentToResolve) {
+                persistEntity('agents', msg.agentId, {
+                  ...agentToResolve,
+                  status: 'done',
+                  completedAt: new Date().toISOString(),
+                })
+              }
               mutate(`agents.${msg.agentId}`, undefined)
               mutate(`visuals.${msg.agentId}`, undefined)
               broadcastAgent(msg.agentId)
@@ -678,6 +757,9 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 completedAt: new Date().toISOString(),
               })
             }
+
+            // Remove old master from in-memory state (already persisted to disk above)
+            mutate(`agents.${oldMasterId}`, undefined)
 
             // Create new master session
             const newMasterId = `master_${Date.now()}`
@@ -811,13 +893,22 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               reverted: revertResult.reverted,
               failed: revertResult.failed,
             }))
-            // Remove reverted file changes from server state
+            // Remove reverted file changes from agent state
             const agentState = getState().agents[lizardId]
             if (agentState?.fileChanges) {
               const revertedSet = new Set(revertResult.reverted)
               const remaining = agentState.fileChanges.filter(fc => !revertedSet.has(fc.filePath))
               mutate(`agents.${lizardId}.fileChanges`, remaining)
+              // Also remove from agent's fileChangePaths
+              if (agentState.fileChangePaths) {
+                mutate(`agents.${lizardId}.fileChangePaths`, agentState.fileChangePaths.filter(p => !revertedSet.has(p)))
+              }
               broadcastAgent(lizardId)
+            }
+            // Clean up top-level fileChanges entries
+            for (const filePath of revertResult.reverted) {
+              const encodedPath = filePath.replace(/\//g, '--')
+              mutate(`fileChanges.${encodedPath}`, undefined)
             }
             break
           }
@@ -831,6 +922,11 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               killed = abortGekto(masterAgent?.messages as import('./gektoPersistent.js').StoredMessage[] | undefined)
             } else {
               killed = killSession(lizardId)
+              // Update agent status in server state
+              if (killed && getState().agents[lizardId]) {
+                mutate(`agents.${lizardId}.status`, 'error')
+                broadcastAgent(lizardId)
+              }
             }
             ws.send(JSON.stringify({
               type: 'kill_result',
