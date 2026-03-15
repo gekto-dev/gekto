@@ -2,6 +2,7 @@ import { spawn } from 'child_process'
 import { CLAUDE_PATH } from '../claudePath.js'
 import { sendPlanningPrompt, type GektoCallbacks } from './gektoPersistent.js'
 import type { Task, ExecutionPlan, GektoToolResult } from './types.js'
+import { getState } from '../state.js'
 
 // Re-export types for backward compatibility
 export type { Task, ExecutionPlan, GektoToolResult } from './types.js'
@@ -140,12 +141,49 @@ export async function processWithTools(
   existingPlan?: ExistingPlanContext,
   imagePaths?: string[],
 ): Promise<GektoToolResult> {
-  // Build context prompt with active agents and existing plan
+  // Build context prompt with active agents, tasks, plans
   let contextPrompt = prompt
 
-  // Add agent context
-  if (activeAgents.length > 0) {
-    contextPrompt += `\n\n[Context: Active agents: ${activeAgents.map(a => a.lizardId).join(', ')}]`
+  // Build rich context from server state
+  const serverState = getState()
+  const contextParts: string[] = []
+
+  // Active agents with their current tasks
+  const agentEntries = Object.values(serverState.agents).filter(a => !a.id.startsWith('master_'))
+  if (agentEntries.length > 0) {
+    const agentLines = agentEntries.map(a => {
+      const task = a.taskId ? serverState.tasks[a.taskId] : null
+      const files = task?.files?.join(', ') || ''
+      return `  - ${a.id}: status=${a.status}${task ? `, task="${task.name}" (${task.status})` : ''}${files ? `, files=[${files}]` : ''}`
+    })
+    contextParts.push(`Active agents:\n${agentLines.join('\n')}`)
+  }
+
+  // Active plans and their tasks
+  const planEntries = Object.values(serverState.activePlans)
+  if (planEntries.length > 0) {
+    const planLines = planEntries.map(plan => {
+      const tasks = plan.taskIds.map(id => serverState.tasks[id]).filter(Boolean)
+      const taskSummary = tasks.map(t => `    - "${t.name}" (${t.status})${t.files?.length ? ` files=[${t.files.join(', ')}]` : ''}`).join('\n')
+      return `  Plan "${plan.title || plan.id}" (${plan.status}):\n${taskSummary || '    (no tasks yet)'}`
+    })
+    contextParts.push(`Active plans:\n${planLines.join('\n')}`)
+  }
+
+  // Files currently being modified
+  const activeFiles = new Set<string>()
+  for (const agent of agentEntries) {
+    if (agent.status === 'working' && agent.taskId) {
+      const task = serverState.tasks[agent.taskId]
+      task?.files?.forEach(f => activeFiles.add(f))
+    }
+  }
+  if (activeFiles.size > 0) {
+    contextParts.push(`Files currently being modified by running agents:\n  ${[...activeFiles].join('\n  ')}`)
+  }
+
+  if (contextParts.length > 0) {
+    contextPrompt += `\n\n[CURRENT STATE:\n${contextParts.join('\n\n')}]`
   }
 
   // Add existing plan context for modifications

@@ -474,13 +474,21 @@ export function rebuildOverview(state: GektoAppState): void {
     }
   }
 
-  for (const [encodedPath, fc] of Object.entries(state.fileChanges)) {
-    (overview.fileChanges as Record<string, unknown>)[encodedPath] = {
-      tool: fc.tool,
-      filePath: fc.filePath,
-      agentId: fc.agentId,
-      taskId: fc.taskId,
-      timestamp: fc.timestamp,
+  // Show files that are planned or currently being worked on (not completed)
+  const pendingFiles = overview.fileChanges as Record<string, unknown>
+  for (const [, task] of Object.entries(state.tasks)) {
+    if (!activePlanTaskIds.has(task.id)) continue
+    if (task.status === 'completed' || task.status === 'failed') continue
+    if (task.files) {
+      for (const filePath of task.files) {
+        pendingFiles[filePath] = {
+          filePath,
+          taskId: task.id,
+          taskName: task.name,
+          taskStatus: task.status,
+          agentId: task.assignedAgentId || null,
+        }
+      }
     }
   }
 

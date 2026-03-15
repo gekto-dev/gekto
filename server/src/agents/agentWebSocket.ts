@@ -523,11 +523,39 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             const currentState = getState()
             const cancelPlan = currentState.activePlans[msg.planId]
             if (cancelPlan) {
-              // Clean up tasks belonging to this plan
+              // Collect agents assigned to this plan's tasks
+              const planAgentIds = new Set<string>()
               if (cancelPlan.taskIds?.length) {
                 for (const taskId of cancelPlan.taskIds) {
+                  const task = currentState.tasks[taskId]
+                  if (task?.assignedAgentId) {
+                    planAgentIds.add(task.assignedAgentId)
+                  }
                   mutate(`tasks.${taskId}`, undefined)
                   broadcastTask(taskId)
+                }
+              }
+              // Clean up agents that were assigned to this plan
+              for (const agentId of planAgentIds) {
+                const agent = currentState.agents[agentId]
+                if (agent) {
+                  // Kill running session if any
+                  killSession(agentId)
+                  persistEntity('agents', agentId, {
+                    ...agent,
+                    status: 'done',
+                    completedAt: new Date().toISOString(),
+                  })
+                  mutate(`agents.${agentId}`, undefined)
+                  mutate(`visuals.${agentId}`, undefined)
+                  broadcastAgent(agentId)
+                  broadcastVisualDelete(agentId)
+                  // Clean up fileChanges for this agent
+                  for (const [encodedPath, fc] of Object.entries(currentState.fileChanges)) {
+                    if (fc.agentId === agentId) {
+                      mutate(`fileChanges.${encodedPath}`, undefined)
+                    }
+                  }
                 }
               }
               mutate(`activePlans.${msg.planId}`, undefined)
