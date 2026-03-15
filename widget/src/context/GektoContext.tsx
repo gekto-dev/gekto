@@ -235,8 +235,10 @@ export function GektoProvider({ children }: GektoProviderProps) {
     })
 
     // Create agents and tasks in store for each task to run
+    // Mark as dispatched to prevent auto-run effect from duplicating
     const taskAssignments: { taskId: string; agentId: string; prompt: string }[] = []
     for (const task of tasksToRun) {
+      dispatchedTaskIdsRef.current.add(task.id)
       const agentId = `worker_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
 
       // Create task+agent in server state

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Editor, createShapeId } from 'tldraw'
 import type { TLShapeId } from 'tldraw'
 import type { Agent, Task } from '../../store/store'
+import type { ExecutionPlan } from '../../hooks/useServerState'
 import type { TaskShape, TaskStatus as ShapeStatus } from './TaskShape'
 import { orderFrameElements } from './orderFrameElements'
 
@@ -151,6 +152,10 @@ interface AgentWithTask {
   fileChangeCount?: number
 }
 
+interface PlanInfo {
+  activePlans: Record<string, ExecutionPlan>
+}
+
 interface DeletedAgentData {
   agent: Agent
   task?: Task
@@ -167,10 +172,13 @@ export function useAgentShapeSync(
   editor: Editor | null,
   agentsWithTasks: AgentWithTask[],
   onDeleteAgent?: (agentId: string) => void,
-  onRestoreAgent?: (agent: Agent, task?: Task) => void
+  onRestoreAgent?: (agent: Agent, task?: Task) => void,
+  planInfo?: PlanInfo,
 ) {
   // Map agent ID -> shape ID (since we use random IDs like Add Tasks button)
   const agentToShapeRef = useRef<Map<string, TLShapeId>>(new Map())
+  // Map plan ID -> frame shape ID (for grouping agents by plan)
+  const planToFrameRef = useRef<Map<string, TLShapeId>>(new Map())
   // Track shapes we're deleting ourselves (to avoid triggering onDeleteAgent)
   const deletingShapesRef = useRef<Set<TLShapeId>>(new Set())
   // Buffer of recently deleted agents for undo support
@@ -218,7 +226,7 @@ export function useAgentShapeSync(
       deletedAgentsRef.current.delete(agent.id)
     }
 
-    // Second pass: place new agents at viewport center (or into selected frame)
+    // Second pass: place new agents at viewport center (or into selected frame / plan frame)
     if (newAgents.length > 0) {
       const viewportCenter = editor.getViewportScreenCenter()
       const pageCenter = editor.screenToPage(viewportCenter)
@@ -229,112 +237,177 @@ export function useAgentShapeSync(
         ? selectedShapes[0]
         : null
 
-      if (selectedFrame) {
-        // Place all new agents into the selected frame
-        for (let i = 0; i < newAgents.length; i++) {
-          const entry = newAgents[i]
+      // Group new agents by planId (from task, not agent — agents don't carry planId)
+      const byPlan = new Map<string | null, typeof newAgents>()
+      for (const entry of newAgents) {
+        const planId = entry.task?.planId ?? null
+        if (!byPlan.has(planId)) byPlan.set(planId, [])
+        byPlan.get(planId)!.push(entry)
+      }
+
+      for (const [planId, planAgents] of byPlan) {
+        if (selectedFrame && !planId) {
+          // No plan, frame selected: place into selected frame
+          for (const entry of planAgents) {
+            const idx = agentsWithTasks.indexOf(entry)
+            const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
+            const shapeId = createShapeId()
+            try {
+              editor.createShape({
+                id: shapeId,
+                type: 'task' as const,
+                x: 0,
+                y: 0,
+                parentId: selectedFrame.id,
+                props,
+              } as any)
+              agentToShape.set(entry.agent.id, shapeId)
+            } catch (err) {
+              console.error('[AgentShapeSync] Error creating shape:', err)
+            }
+          }
+          orderFrameElements(editor, selectedFrame)
+        } else if (planId) {
+          // Agents belong to a plan — find or create plan frame
+          let frameId = planToFrameRef.current.get(planId)
+          let frameShape = frameId ? editor.getShape(frameId) : undefined
+
+          // Verify the frame still exists
+          if (frameId && !frameShape) {
+            planToFrameRef.current.delete(planId)
+            frameId = undefined
+          }
+
+          if (!frameId) {
+            // Create a new frame for this plan
+            const plan = planInfo?.activePlans[planId]
+            const frameName = plan?.title || plan?.originalPrompt?.slice(0, 40) || 'Plan'
+
+            const count = planAgents.length
+            const cols = Math.min(count, 3)
+            const rows = Math.ceil(count / 3)
+            const padding = 20
+            const gap = 16
+            const frameW = padding * 2 + cols * CARD_WIDTH + (cols - 1) * gap
+            const frameH = padding * 2 + rows * CARD_HEIGHT + (rows - 1) * gap + 32
+
+            frameId = createShapeId()
+            const { x: frameX, y: frameY } = findNonOverlappingPosition(
+              editor,
+              pageCenter.x - frameW / 2,
+              pageCenter.y - frameH / 2,
+              frameW,
+              frameH,
+            )
+            editor.createShape({
+              id: frameId,
+              type: 'frame',
+              x: frameX,
+              y: frameY,
+              props: { w: frameW, h: frameH, name: frameName },
+              meta: { planId },
+            })
+            planToFrameRef.current.set(planId, frameId)
+          }
+
+          // Place agents inside the plan frame
+          for (const entry of planAgents) {
+            const idx = agentsWithTasks.indexOf(entry)
+            const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
+            const shapeId = createShapeId()
+            try {
+              editor.createShape({
+                id: shapeId,
+                type: 'task' as const,
+                x: 0,
+                y: 0,
+                parentId: frameId,
+                props,
+              } as any)
+              agentToShape.set(entry.agent.id, shapeId)
+            } catch (err) {
+              console.error('[AgentShapeSync] Error creating shape:', err)
+            }
+          }
+
+          // Re-arrange children inside the plan frame
+          frameShape = editor.getShape(frameId)
+          orderFrameElements(editor, frameShape)
+        } else if (planAgents.length === 1) {
+          // Single agent, no plan, no frame selected: place at viewport center
+          const entry = planAgents[0]
           const idx = agentsWithTasks.indexOf(entry)
           const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
           const shapeId = createShapeId()
+
+          const { x, y } = findNonOverlappingPosition(
+            editor,
+            pageCenter.x - CARD_WIDTH / 2,
+            pageCenter.y - CARD_HEIGHT / 2,
+            CARD_WIDTH,
+            CARD_HEIGHT,
+          )
 
           try {
             editor.createShape({
               id: shapeId,
               type: 'task' as const,
-              x: 0,
-              y: 0,
-              parentId: selectedFrame.id,
+              x,
+              y,
               props,
             } as any)
             agentToShape.set(entry.agent.id, shapeId)
           } catch (err) {
             console.error('[AgentShapeSync] Error creating shape:', err)
           }
-        }
+        } else {
+          // Batch, no plan, no frame selected: create a generic frame
+          const count = planAgents.length
+          const cols = Math.min(count, 3)
+          const rows = Math.ceil(count / 3)
+          const padding = 20
+          const gap = 16
+          const frameW = padding * 2 + cols * CARD_WIDTH + (cols - 1) * gap
+          const frameH = padding * 2 + rows * CARD_HEIGHT + (rows - 1) * gap + 32
 
-        // Re-arrange all children inside the frame
-        orderFrameElements(editor, selectedFrame)
-      } else if (newAgents.length === 1) {
-        // Single agent, no frame selected: place at viewport center, avoiding overlaps
-        const entry = newAgents[0]
-        const idx = agentsWithTasks.indexOf(entry)
-        const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
-        const shapeId = createShapeId()
-
-        const { x, y } = findNonOverlappingPosition(
-          editor,
-          pageCenter.x - CARD_WIDTH / 2,
-          pageCenter.y - CARD_HEIGHT / 2,
-          CARD_WIDTH,
-          CARD_HEIGHT,
-        )
-
-        try {
+          const frameId = createShapeId()
+          const { x: frameX, y: frameY } = findNonOverlappingPosition(
+            editor,
+            pageCenter.x - frameW / 2,
+            pageCenter.y - frameH / 2,
+            frameW,
+            frameH,
+          )
           editor.createShape({
-            id: shapeId,
-            type: 'task' as const,
-            x,
-            y,
-            props,
-          } as any)
-          agentToShape.set(entry.agent.id, shapeId)
-        } catch (err) {
-          console.error('[AgentShapeSync] Error creating shape:', err)
-        }
-      } else {
-        // Batch, no frame selected: create a new frame at viewport center
-        const count = newAgents.length
-        const cols = Math.min(count, 3)
-        const rows = Math.ceil(count / 3)
-        const padding = 20
-        const gap = 16
-        const frameW = padding * 2 + cols * CARD_WIDTH + (cols - 1) * gap
-        const frameH = padding * 2 + rows * CARD_HEIGHT + (rows - 1) * gap + 32 // 32 for title bar
+            id: frameId,
+            type: 'frame',
+            x: frameX,
+            y: frameY,
+            props: { w: frameW, h: frameH, name: 'Tasks' },
+          })
 
-        const frameId = createShapeId()
-        const { x: frameX, y: frameY } = findNonOverlappingPosition(
-          editor,
-          pageCenter.x - frameW / 2,
-          pageCenter.y - frameH / 2,
-          frameW,
-          frameH,
-        )
-        editor.createShape({
-          id: frameId,
-          type: 'frame',
-          x: frameX,
-          y: frameY,
-          props: {
-            w: frameW,
-            h: frameH,
-            name: 'Tasks',
-          },
-        })
-
-        for (let i = 0; i < newAgents.length; i++) {
-          const entry = newAgents[i]
-          const idx = agentsWithTasks.indexOf(entry)
-          const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
-          const shapeId = createShapeId()
-
-          try {
-            editor.createShape({
-              id: shapeId,
-              type: 'task' as const,
-              x: 0,
-              y: 0,
-              parentId: frameId,
-              props,
-            } as any)
-            agentToShape.set(entry.agent.id, shapeId)
-          } catch (err) {
-            console.error('[AgentShapeSync] Error creating shape:', err)
+          for (const entry of planAgents) {
+            const idx = agentsWithTasks.indexOf(entry)
+            const props = buildShapeProps(entry.agent, entry.task, idx, entry.currentTool, entry.streamingText, entry.workingDir, entry.fileChangeCount)
+            const shapeId = createShapeId()
+            try {
+              editor.createShape({
+                id: shapeId,
+                type: 'task' as const,
+                x: 0,
+                y: 0,
+                parentId: frameId,
+                props,
+              } as any)
+              agentToShape.set(entry.agent.id, shapeId)
+            } catch (err) {
+              console.error('[AgentShapeSync] Error creating shape:', err)
+            }
           }
-        }
 
-        // Arrange children neatly inside the frame
-        const frameShape = editor.getShape(frameId)
-        orderFrameElements(editor, frameShape)
+          const frameShape = editor.getShape(frameId)
+          orderFrameElements(editor, frameShape)
+        }
       }
     }
 
@@ -385,22 +458,31 @@ export function useAgentShapeSync(
         }
       }
     }
-  }, [editor, agentsWithTasks])
+  }, [editor, agentsWithTasks, planInfo])
 
-  // Initialize: rebuild mapping from existing shapes with agentId
+  // Initialize: rebuild mapping from existing shapes with agentId and frames with planId
   useEffect(() => {
     if (!editor) return
 
     const agentToShape = agentToShapeRef.current
-    const existingShapes = editor.getCurrentPageShapes().filter(
-      s => (s.type as string) === 'task'
-    )
+    const planToFrame = planToFrameRef.current
+    const allShapes = editor.getCurrentPageShapes()
 
-    // Rebuild mapping from shapes that have agentId
-    for (const shape of existingShapes) {
+    // Rebuild agent mapping from shapes that have agentId
+    const taskShapes = allShapes.filter(s => (s.type as string) === 'task')
+    for (const shape of taskShapes) {
       const taskShape = shape as unknown as TaskShape
       if (taskShape.props?.agentId && !agentToShape.has(taskShape.props.agentId)) {
         agentToShape.set(taskShape.props.agentId, shape.id)
+      }
+    }
+
+    // Rebuild plan frame mapping from frames that have meta.planId
+    const frameShapes = allShapes.filter(s => s.type === 'frame')
+    for (const frame of frameShapes) {
+      const framePlanId = (frame.meta as Record<string, unknown>)?.planId as string | undefined
+      if (framePlanId && !planToFrame.has(framePlanId)) {
+        planToFrame.set(framePlanId, frame.id)
       }
     }
   }, [editor])

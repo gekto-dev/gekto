@@ -256,9 +256,10 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
   const { sessions, getWorkingDir, revertFiles, acceptAgent } = useAgent()
   const workingDir = getWorkingDir()
 
-  // Get agents and tasks from store
+  // Get agents, tasks, and active plans from store
   const agents = useStore((s) => s.agents)
   const tasks = useStore((s) => s.tasks)
+  const activePlans = useStore((s) => s.activePlans)
   const deleteAgent = useStore((s) => s.deleteAgent)
   const createAgent = useStore((s) => s.createAgent)
   const createTask = useStore((s) => s.createTask)
@@ -407,7 +408,8 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
   // Positions managed by tldraw via persistenceKey
   // When user deletes shape, agent is removed from store
   // When user undoes deletion, agent is restored from buffer
-  useAgentShapeSync(editor, agentsWithTasks, deleteAgent, handleRestoreAgent)
+  const planInfoMemo = useMemo(() => ({ activePlans }), [activePlans])
+  useAgentShapeSync(editor, agentsWithTasks, deleteAgent, handleRestoreAgent, planInfoMemo)
 
   // Setup portal container on mount (preload)
   useEffect(() => {

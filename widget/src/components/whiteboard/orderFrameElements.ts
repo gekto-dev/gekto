@@ -2,6 +2,7 @@ import type { Editor } from 'tldraw'
 
 /**
  * Auto-layout children inside a frame in a grid.
+ * Also resizes the frame to fit all children.
  */
 export function orderFrameElements(editor: Editor, frameShape: ReturnType<Editor['getShape']>) {
   if (!frameShape) return
@@ -15,10 +16,9 @@ export function orderFrameElements(editor: Editor, frameShape: ReturnType<Editor
 
   if (children.length === 0) return
 
-  // Get frame bounds
-  const frameBounds = editor.getShapeGeometry(frameShape).bounds
   const padding = 20
   const gap = 16
+  const titleBarH = 32
 
   // Get each child's size
   const childSizes = children.map(child => {
@@ -26,14 +26,12 @@ export function orderFrameElements(editor: Editor, frameShape: ReturnType<Editor
     return { id: child.id, type: child.type, w: bounds.w, h: bounds.h }
   })
 
-  // Calculate columns that fit in the frame
+  // Calculate grid layout: use 3 columns max
   const maxChildW = Math.max(...childSizes.map(c => c.w))
-  const availableW = frameBounds.w - padding * 2
-  const cols = Math.max(1, Math.floor((availableW + gap) / (maxChildW + gap)))
+  const cols = Math.min(children.length, 3)
 
   // Lay out in grid rows
   const updates: Array<{ id: typeof children[0]['id']; type: string; x: number; y: number }> = []
-  let row = 0
   let col = 0
   let rowHeight = 0
   let y = padding
@@ -41,7 +39,6 @@ export function orderFrameElements(editor: Editor, frameShape: ReturnType<Editor
   for (const child of childSizes) {
     if (col >= cols) {
       col = 0
-      row++
       y += rowHeight + gap
       rowHeight = 0
     }
@@ -53,4 +50,13 @@ export function orderFrameElements(editor: Editor, frameShape: ReturnType<Editor
   }
 
   editor.updateShapes(updates as any)
+
+  // Resize frame to fit children
+  const frameW = padding * 2 + cols * maxChildW + (cols - 1) * gap
+  const frameH = y + rowHeight + padding + titleBarH
+  editor.updateShape({
+    id: frameShape.id,
+    type: 'frame',
+    props: { w: frameW, h: frameH },
+  } as any)
 }
