@@ -81,9 +81,16 @@ export interface ExecutionPlan {
 }
 
 export interface GektoToolResult {
-  type: 'chat' | 'build' | 'remove'
+  type: 'chat' | 'build' | 'remove' | 'delegate' | 'add_task'
   message?: string
   plan?: ExecutionPlan
   tasks?: Task[]
   removedAgents?: string[]
+  delegateAgentId?: string
+  delegateMessage?: string
+  newTask?: {
+    name: string
+    description: string
+    files: string[]
+  }
 }

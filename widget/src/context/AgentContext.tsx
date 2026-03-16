@@ -424,6 +424,7 @@ export function AgentProvider({ children }: AgentProviderProps) {
         case 'gekto_tool_end':
         case 'gekto_done':
         case 'gekto_remove':
+        case 'gekto_delegate':
         case 'planning_started':
         case 'tasks_generated':
         case 'session_restored': {

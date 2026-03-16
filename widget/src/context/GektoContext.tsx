@@ -619,6 +619,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
     prompt?: string
     message?: string
     removedAgents?: string[]
+    agentId?: string
+    agentName?: string
     mode?: string
     text?: string
     timing?: { classifyMs?: number; workMs?: number }
@@ -724,6 +726,30 @@ export function GektoProvider({ children }: GektoProviderProps) {
           }
         }
         break
+
+      case 'gekto_delegate': {
+        // Resolve agent display name from store (same logic as Lizard.tsx)
+        const delegateAgentId = msg.agentId || ''
+        const storeAgents = serverState.agents
+        const delegateAgent = storeAgents[delegateAgentId]
+        const delegateTask = delegateAgent?.taskId ? serverState.tasks[delegateAgent.taskId] : null
+        const agentIds = Object.keys(storeAgents).filter(id => !id.startsWith('master_'))
+        const agentIndex = agentIds.indexOf(delegateAgentId)
+        const displayName = delegateTask?.name || `Agent ${agentIndex + 1}`
+
+        const delegateListener = (window as unknown as { __agentMessageListeners?: Map<string, (message: { id: string; text: string; sender: string; timestamp: Date; systemType?: string; systemData?: Record<string, unknown> }) => void> }).__agentMessageListeners?.get('master')
+        if (delegateListener) {
+          delegateListener({
+            id: Date.now().toString(),
+            text: msg.message || '',
+            sender: 'system',
+            timestamp: new Date(),
+            systemType: 'info',
+            systemData: { type: 'delegate', agentName: displayName, agentId: delegateAgentId },
+          })
+        }
+        break
+      }
 
       case 'gekto_remove':
         if (msg.removedAgents && msg.removedAgents.length > 0) {

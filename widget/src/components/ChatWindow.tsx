@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { useAgent, useAgentMessageListener, type Message } from '../context/AgentContext'
 import { useGekto } from '../context/GektoContext'
 import { useStore } from '../store/store'
+import { useSwarm } from '../context/SwarmContext'
 import { useServerState, getServerState, updateLocalAgentMessages, updateLocalCurrentMasterId } from '../hooks/useServerState'
 
 const MASTER_ID = 'master'
@@ -117,6 +118,7 @@ export function ChatWindow({
   } = useAgent()
 
   const { createPlan, currentPlan, activePlans, selectedPlanId, isCreatingNewPlan, selectPlan, createNewPlan, openPlanPanel, cancelPlan, markTaskInProgress } = useGekto()
+  const { openChat } = useSwarm()
   const { state: serverState, send: sendToServer, isReady: serverReady } = useServerState()
   // Get agent/task names from global store
   const agents = useStore((s) => s.agents)
@@ -325,6 +327,8 @@ export function ChatWindow({
         startTime: toIso(m.toolUse.startTime),
         endTime: m.toolUse.endTime ? toIso(m.toolUse.endTime) : undefined,
       } : undefined,
+      systemType: m.systemType,
+      systemData: m.systemData,
     }))
 
     // Save to server via WS
@@ -612,6 +616,8 @@ export function ChatWindow({
         startTime: toIso(m.toolUse.startTime),
         endTime: m.toolUse.endTime ? toIso(m.toolUse.endTime) : undefined,
       } : undefined,
+      systemType: m.systemType,
+      systemData: m.systemData,
     }))
     const ws = (window as unknown as { __gektoWebSocket?: WebSocket }).__gektoWebSocket
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1188,10 +1194,32 @@ export function ChatWindow({
           >
             {/* System message */}
             {message.sender === 'system' ? (
-              <div className="flex items-center gap-2 py-1">
-                <span style={{ color: '#4ade80', fontSize: '8px' }}>◆</span>
-                <span className="font-mono text-xs" style={{ color: 'rgba(134, 239, 172, 0.6)' }}>{message.text}</span>
-              </div>
+              message.systemData?.type === 'delegate' ? (
+                <div
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md font-mono text-xs"
+                  style={{
+                    background: 'rgba(34, 197, 94, 0.08)',
+                    border: '1px solid rgba(34, 197, 94, 0.15)',
+                  }}
+                >
+                  <span style={{ color: '#4ade80', fontSize: '8px' }}>◆</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.4)' }}>Delegated to</span>
+                  <span
+                    onClick={() => {
+                      const id = message.systemData?.agentId as string
+                      if (id) openChat(id, 'task')
+                    }}
+                    style={{ color: '#4ade80', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(74, 222, 128, 0.3)', textUnderlineOffset: '2px' }}
+                  >
+                    {String(message.systemData.agentName)}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 py-1">
+                  <span style={{ color: '#4ade80', fontSize: '8px' }}>◆</span>
+                  <span className="font-mono text-xs" style={{ color: 'rgba(134, 239, 172, 0.6)' }}>{message.text}</span>
+                </div>
+              )
             ) : (
               /* Regular message */
               <div

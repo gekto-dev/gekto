@@ -63,12 +63,16 @@ interface ExistingPlanContext {
 // === Structured output parsing ===
 
 interface GektoStructuredOutput {
-  action: 'create_plan' | 'reply' | 'clarify' | 'remove_agents' | 'update_plan'
+  action: 'create_plan' | 'reply' | 'clarify' | 'remove_agents' | 'update_plan' | 'delegate' | 'add_task'
   message?: string
   title?: string
   abstract?: string
   buildPrompt?: string
   target?: string
+  agentId?: string
+  taskName?: string
+  taskDescription?: string
+  taskFiles?: string[]
 }
 
 function parseGektoOutput(raw: string): GektoStructuredOutput | null {
@@ -251,6 +255,14 @@ The user's message above is a modification request. Respond with "update_plan" a
       return {
         type: 'remove',
         removedAgents: resolveRemoveTarget(parsed.target || 'all', activeAgents),
+      }
+
+    case 'delegate':
+      return {
+        type: 'delegate',
+        delegateAgentId: parsed.agentId,
+        delegateMessage: parsed.message,
+        message: parsed.message,
       }
 
     default:

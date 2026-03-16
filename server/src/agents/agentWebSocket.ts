@@ -300,13 +300,17 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               )
 
               // Replace streamed JSON with clean message (always send to overwrite raw JSON)
-              const cleanMessage = planResult.message || planResult.plan?.reasoning || 'Got it, here\'s the plan.'
+              // For delegate, the system message handles display — clear the streaming text
+              const cleanMessage = planResult.type === 'delegate'
+                ? ''
+                : (planResult.message || planResult.plan?.reasoning || 'Got it, here\'s the plan.')
               ws.send(JSON.stringify({
                 type: 'gekto_text',
                 planId: msg.planId,
                 requestId,
                 text: cleanMessage,
                 blockIndex,
+                isFinalize: planResult.type === 'delegate',
               }))
 
               if (planResult.type === 'build' && planResult.plan) {
@@ -363,6 +367,40 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   planId: msg.planId,
                   agents: planResult.removedAgents,
                 }))
+              } else if (planResult.type === 'delegate' && planResult.delegateAgentId) {
+                // Clear stale planning state — delegate doesn't create a plan
+                const currentState = getState()
+                if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
+                  mutate(`activePlans.${msg.planId}`, undefined)
+                  broadcastSinglePlan(msg.planId)
+                }
+                // Send instruction to existing agent
+                const targetAgentId = planResult.delegateAgentId
+                const targetAgent = currentState.agents[targetAgentId]
+                if (targetAgent) {
+                  // Update agent status to working
+                  mutate(`agents.${targetAgentId}.status`, 'working')
+                  broadcastAgent(targetAgentId)
+                  // Notify client about delegation
+                  const delegateTask = targetAgent.taskId ? currentState.tasks[targetAgent.taskId] : null
+                  ws.send(JSON.stringify({
+                    type: 'gekto_delegate',
+                    planId: msg.planId,
+                    agentId: targetAgentId,
+                    agentName: delegateTask?.name || targetAgentId,
+                    message: planResult.delegateMessage || '',
+                  }))
+                  // Fire-and-forget: send message to agent's session without blocking Gekto
+                  sendMessage(targetAgentId, planResult.delegateMessage || '', ws).catch(err => {
+                    console.error(`[Agent] Delegate to ${targetAgentId} failed:`, err)
+                  })
+                } else {
+                  ws.send(JSON.stringify({
+                    type: 'gekto_chat',
+                    planId: msg.planId,
+                    message: `Agent ${targetAgentId} not found — it may have been removed.`,
+                  }))
+                }
               } else if (planResult.type === 'chat') {
                 // Chat reply — clear the temporary 'planning' plan state
                 const currentState = getState()

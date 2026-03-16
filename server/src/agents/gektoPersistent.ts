@@ -25,13 +25,17 @@ export const GEKTO_OUTPUT_SCHEMA = JSON.stringify({
   properties: {
     action: {
       type: 'string',
-      enum: ['create_plan', 'reply', 'clarify', 'remove_agents', 'update_plan'],
+      enum: ['create_plan', 'reply', 'clarify', 'remove_agents', 'update_plan', 'delegate', 'add_task'],
     },
     message: { type: 'string' },
     title: { type: 'string' },
     abstract: { type: 'string' },
     buildPrompt: { type: 'string' },
     target: { type: 'string' },
+    agentId: { type: 'string' },
+    taskName: { type: 'string' },
+    taskDescription: { type: 'string' },
+    taskFiles: { type: 'array', items: { type: 'string' } },
   },
   required: ['action'],
 })
@@ -50,9 +54,11 @@ How you act:
 - Every response MUST be a structured JSON action. Never output free text outside of the action schema.
 - If the user greets you or asks a question, use "reply" with your answer in "message".
 - If the user's request is ambiguous, use "clarify" with a focused question in "message".
-- If the user wants to build something, use "create_plan" with a short "title" (2-4 words), an abstract plan description, and a short "message" (1-2 sentences) for the chat — this is a brief confirmation shown to the user, NOT a copy of the abstract.
+- IMPORTANT: Before creating a new plan, ALWAYS check [CURRENT STATE] first. If an existing agent has context about the relevant files, use "delegate" instead. Only use "create_plan" when no existing agent can handle the request.
+- If the user wants to build something and no existing agent is relevant, use "create_plan" with a short "title" (2-4 words), an abstract plan description, and a short "message" (1-2 sentences) for the chat — this is a brief confirmation shown to the user, NOT a copy of the abstract.
 - If the user wants to modify an existing plan abstract, use "update_plan" with the updated abstract. You MUST also include a short "message" for the chat confirming what changed.
 - If the user wants to remove agents, use "remove_agents" with a target.
+- If there is an existing agent that has context about the relevant files or task, use "delegate" with "agentId" (the agent's ID from CURRENT STATE) and "message" (a clear instruction). The agent already has session context — delegating is faster than creating a new plan. Always include a short "message" for the chat confirming what you delegated.
 - ALWAYS research the codebase first (Read, Glob, Grep) before creating plans. Understand the project structure, frameworks, and conventions.
 
 Conflict awareness:
