@@ -34,7 +34,7 @@ const TOOL_TO_STATUS: Record<string, ShapeStatus> = {
 /**
  * Convert Agent + Task → props object (same format as "Add Tasks" button)
  */
-function buildShapeProps(agent: Agent, task: Task | undefined, index: number, currentTool?: string, streamingText?: string, workingDir?: string, fileChangeCount?: number): Record<string, unknown> {
+function buildShapeProps(agent: Agent, task: Task | undefined, index: number, currentTool?: string, _streamingText?: string, workingDir?: string, fileChangeCount?: number): Record<string, unknown> {
   // Map agent status to shape status
   let status: ShapeStatus = 'idle'
   if (agent.status === 'error') status = 'error'

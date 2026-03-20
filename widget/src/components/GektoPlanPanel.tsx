@@ -33,9 +33,10 @@ function buildTaskTree(tasks: Task[]): TaskTreeNode[] {
   const hasParent = new Set<string>()
 
   for (const task of tasks) {
-    if (task.dependencies.length > 0) {
+    if ((task.dependencies ?? []).length > 0) {
       // Use the last dependency as the tree parent (deepest in chain)
-      const parentId = task.dependencies[task.dependencies.length - 1]
+      const deps = task.dependencies ?? []
+      const parentId = deps[deps.length - 1]
       if (taskMap.has(parentId)) {
         const children = childrenOf.get(parentId) || []
         children.push(task.id)
@@ -93,13 +94,11 @@ interface TaskRowProps {
 
 function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRemove, onShowPrompt, onShowDiff, onOpenChat }: TaskRowProps) {
   const depth = treeNode?.depth ?? 0
-  const agent = useStore((s) => task.assignedAgentId ? s.agents[task.assignedAgentId] : undefined)
-  const fileChanges = agent?.fileChanges ?? []
 
   // Check if this pending task has all dependencies satisfied (ready to run)
   // A dep is "done" when agent finished (pending_testing) or user approved (completed)
-  const depsReady = task.status === 'pending' && task.dependencies.length > 0 &&
-    task.dependencies.every(depId => {
+  const depsReady = task.status === 'pending' && (task.dependencies ?? []).length > 0 &&
+    (task.dependencies ?? []).every(depId => {
       const dep = allTasks.find(t => t.id === depId)
       return dep?.status === 'completed' || dep?.status === 'pending_testing'
     })
@@ -183,9 +182,9 @@ function TaskRow({ task, allTasks, treeNode, onMarkResolved, onRun, onStop, onRe
             ) : (
               <button
                 onClick={() => onRun?.(task.id)}
-                disabled={task.status === 'completed' || task.status === 'pending_testing' || !task.prompt || (task.dependencies.length > 0 && !depsReady)}
+                disabled={task.status === 'pending_testing' || !task.prompt || ((task.dependencies ?? []).length > 0 && !depsReady)}
                 className="w-6 h-6 flex items-center justify-center transition-all text-white/40 hover:text-white pl-px cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed"
-                title={task.dependencies.length > 0 && !depsReady ? 'Waiting for dependencies' : 'Run task'}
+                title={(task.dependencies ?? []).length > 0 && !depsReady ? 'Waiting for dependencies' : 'Run task'}
               >
                 <svg width="8" height="10" viewBox="0 0 8 10" fill="currentColor">
                   <path d="M1 0.5a.5.5 0 0 1 .77-.42l5.73 3.57a.5.5 0 0 1 0 .84L1.77 8.06A.5.5 0 0 1 1 7.64V0.5Z" />
@@ -360,7 +359,6 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   }, [diffAgentId])
 
   const hasTasks = tasks.length > 0
-  const isDraft = currentPlan?.status === 'draft'
   const isGeneratingTasks = currentPlan?.status === 'generating_prompts'
   const isPlanning = currentPlan?.status === 'planning'
   const [activeTab, setActiveTab] = useState<'abstract' | 'tasks'>('abstract')
@@ -388,7 +386,7 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
   const doneTaskIds = new Set(tasks.filter(t => t.status === 'completed' || t.status === 'pending_testing').map(t => t.id))
   const availableToRun = tasks.filter(t => {
     if (t.status !== 'pending') return false
-    return t.dependencies.every(depId => doneTaskIds.has(depId))
+    return (t.dependencies ?? []).every(depId => doneTaskIds.has(depId))
   })
   const pendingTestingCount = tasks.filter(t => t.status === 'pending_testing').length
   const totalCount = tasks.length

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useRef, useEffect, useCallback, type DragEvent } from 'react'
 import { FileTextIcon, TrashIcon, ImageIcon, CounterClockwiseClockIcon } from '@radix-ui/react-icons'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -6,7 +6,7 @@ import { useAgent, useAgentMessageListener, type Message } from '../context/Agen
 import { useGekto } from '../context/GektoContext'
 import { useStore } from '../store/store'
 import { useSwarm } from '../context/SwarmContext'
-import { useServerState, getServerState, updateLocalAgentMessages, updateLocalCurrentMasterId } from '../hooks/useServerState'
+import { useServerState, updateLocalAgentMessages, updateLocalCurrentMasterId } from '../hooks/useServerState'
 
 const MASTER_ID = 'master'
 const CHAT_SIZE_KEY = 'gekto-chat-size'
@@ -88,7 +88,6 @@ export function ChatWindow({
   const [isResizing, setIsResizing] = useState(false)
   const [resizeDirection, setResizeDirection] = useState<ResizeDirection | null>(null)
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
-  const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set())
   const [stagedImages, setStagedImages] = useState<string[]>([])
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [isRestoredSession, setIsRestoredSession] = useState(false)
@@ -119,7 +118,7 @@ export function ChatWindow({
 
   const { createPlan, currentPlan, activePlans, selectedPlanId, isCreatingNewPlan, selectPlan, createNewPlan, openPlanPanel, cancelPlan, markTaskInProgress } = useGekto()
   const { openChat } = useSwarm()
-  const { state: serverState, send: sendToServer, isReady: serverReady } = useServerState()
+  const { state: serverState, isReady: serverReady } = useServerState()
   // Get agent/task names from global store
   const agents = useStore((s) => s.agents)
   const tasks = useStore((s) => s.tasks)
@@ -129,7 +128,6 @@ export function ChatWindow({
 
   const isMaster = lizardId === MASTER_ID
   const activePlanCount = Object.values(activePlans).filter(p => p.status !== 'completed' && p.status !== 'failed').length
-  const hasActivePlan = isMaster && activePlanCount > 0
   const isGektoLoading = isMaster && gektoState === 'loading'
 
   // Rotating thinking phrases for master
@@ -807,17 +805,6 @@ export function ChatWindow({
     })
   }
 
-  const toggleThinkingExpanded = (messageId: string) => {
-    setExpandedThinking(prev => {
-      const next = new Set(prev)
-      if (next.has(messageId)) {
-        next.delete(messageId)
-      } else {
-        next.add(messageId)
-      }
-      return next
-    })
-  }
 
   const formatToolInput = (fullInput: Record<string, unknown>): string => {
     try {

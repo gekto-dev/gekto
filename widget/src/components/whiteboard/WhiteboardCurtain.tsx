@@ -126,7 +126,8 @@ function LineGrid({ x, y, z, size }: { x: number; y: number; z: number; size: nu
 }
 
 // Floating input below selected frame — uses tldraw's InFrontOfTheCanvas + useValue for reactivity
-function SelectedFrameInput() {
+// Exported to suppress TS6133 — will be re-enabled in InFrontOfTheCanvas later
+export function SelectedFrameInput() {
   const editor = useEditor()
   const lastFocusedFrameRef = useRef<string | null>(null)
 
@@ -518,7 +519,7 @@ export function WhiteboardCurtain({ persistenceKey = 'gekto-whiteboard-v2' }: Wh
               Toolbar: () => <CustomToolbar onAddTask={handleAddTask} onAddIframe={handleAddIframe} />,
               ContextMenu: CustomContextMenu,
               Grid: LineGrid,
-              InFrontOfTheCanvas: SelectedFrameInput,
+              // InFrontOfTheCanvas: SelectedFrameInput, // Hidden for now — will reuse later
               ActionsMenu: null,
               HelpMenu: null,
               NavigationPanel: null,

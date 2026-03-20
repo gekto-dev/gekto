@@ -63,12 +63,12 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
   wss.on('connection', (ws: WebSocket) => {
     // Wrap ws.send for logging
     const originalSend = ws.send.bind(ws)
-    const loggedSend: typeof ws.send = (data, ...args) => {
+    const loggedSend = ((data: unknown, ...args: unknown[]) => {
       if (typeof data === 'string') {
         try { logOutgoing(JSON.parse(data)) } catch { /* ignore */ }
       }
-      return originalSend(data, ...args)
-    }
+      return (originalSend as Function)(data, ...args)
+    }) as typeof ws.send
     ws.send = loggedSend
 
     // Track client for state diffs

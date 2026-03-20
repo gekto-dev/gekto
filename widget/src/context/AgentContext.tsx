@@ -144,8 +144,11 @@ export function AgentProvider({ children }: AgentProviderProps) {
     sessionsRef.current = sessions
   }, [sessions])
 
-  // Message listeners
+  // Message listeners — initialize synchronously so child effects can register before parent effects run
   const messageListenersRef = useRef<Map<string, (message: Message) => void>>(new Map())
+  if (!(window as unknown as { __agentMessageListeners?: Map<string, (message: Message) => void> }).__agentMessageListeners) {
+    (window as unknown as { __agentMessageListeners: Map<string, (message: Message) => void> }).__agentMessageListeners = messageListenersRef.current
+  }
 
   // Name extractor callback
   const nameExtractorRef = useRef<((lizardId: string, name: string) => void) | null>(null)
@@ -674,11 +677,6 @@ export function AgentProvider({ children }: AgentProviderProps) {
 
   const getWebSocketFn = useCallback((): WebSocket | null => {
     return wsRef.current
-  }, [])
-
-  // Expose message listeners globally
-  useEffect(() => {
-    (window as unknown as { __agentMessageListeners: Map<string, (message: Message) => void> }).__agentMessageListeners = messageListenersRef.current
   }, [])
 
   const value: AgentContextValue = {

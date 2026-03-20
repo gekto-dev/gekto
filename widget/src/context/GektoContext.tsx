@@ -231,7 +231,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
     const tasksToRun = tasks.filter(task => {
       if (task.status !== 'pending') return false
-      return task.dependencies.every(depId => doneTaskIds.has(depId))
+      return (task.dependencies ?? []).every(depId => doneTaskIds.has(depId))
     })
 
     // Create agents and tasks in store for each task to run
@@ -513,7 +513,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     const available = tasks.filter(task => {
       if (task.status !== 'pending') return false
       if (dispatchedTaskIdsRef.current.has(task.id)) return false
-      return task.dependencies.every(depId => doneTaskIds.has(depId))
+      return (task.dependencies ?? []).every(depId => doneTaskIds.has(depId))
     })
 
     if (!available.length) return
@@ -562,7 +562,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
         lizardId: agentId,
       }))
 
-      assignments.push({ taskId: task.id, agentId, prompt: task.prompt, description: task.description, files: task.files })
+      assignments.push({ taskId: task.id, agentId, prompt: task.prompt, description: task.description, files: task.files ?? [] })
     }
 
     setTimeout(() => {
