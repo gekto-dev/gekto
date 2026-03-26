@@ -202,12 +202,13 @@ if (typeof document !== 'undefined' && !document.getElementById('task-shape-styl
   document.head.appendChild(style)
 }
 
-// Base colors (dark theme)
+// Base colors (matching ChatWindow theme)
 const BASE_COLORS = {
-  bg: '#2a2a2a',
-  border: '#3a3a3a',
+  bg: 'linear-gradient(135deg, rgb(35, 35, 45), rgb(45, 45, 55))',
+  bgFlat: 'rgb(40, 40, 50)',
+  border: 'rgba(255, 255, 255, 0.08)',
   text: '#e5e5e5',
-  textMuted: '#a1a1a1',
+  textMuted: 'rgba(255, 255, 255, 0.5)',
 }
 
 // Status-based accent colors
@@ -307,7 +308,7 @@ export class TaskShapeUtil extends ShapeUtil<any> {
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           }}
         >
@@ -433,7 +434,7 @@ export class TaskShapeUtil extends ShapeUtil<any> {
                 justifyContent: 'space-between',
                 padding: '6px 12px',
                 borderTop: `1px solid ${BASE_COLORS.border}`,
-                background: '#1a1a1a',
+                background: 'rgba(0, 0, 0, 0.2)',
                 fontSize: 11,
                 color: BASE_COLORS.textMuted,
               }}

@@ -1,59 +1,63 @@
-import type { Todo } from '../types/todo'
+import { Priority, Todo } from '../types';
 
 interface TodoItemProps {
-  todo: Todo
-  onToggle: (id: string) => void
-  onDelete: (id: string) => void
+  todo: Todo;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+}
+
+function capitalizeFirst(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function isOverdue(dueDate: Date, completed: boolean): boolean {
+  if (completed) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(dueDate);
+  due.setHours(0, 0, 0, 0);
+  return due < today;
 }
 
 export function TodoItem({ todo, onToggle, onDelete }: TodoItemProps) {
+  const formattedCreatedAt = todo.createdAt.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  const priority: Priority = todo.priority || 'low';
+
+  const dueDateObj = todo.dueDate ? new Date(todo.dueDate) : null;
+  const formattedDueDate = dueDateObj
+    ? dueDateObj.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : null;
+  const overdueClass = dueDateObj && isOverdue(dueDateObj, todo.completed) ? ' overdue' : '';
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '12px 16px',
-        background: '#1a1a1a',
-        borderRadius: 8,
-        marginBottom: 8,
-      }}
-    >
+    <li className={`todo-item${todo.completed ? ' completed' : ''}`}>
       <input
         type="checkbox"
         checked={todo.completed}
         onChange={() => onToggle(todo.id)}
-        style={{
-          width: 20,
-          height: 20,
-          cursor: 'pointer',
-          accentColor: '#4ade80',
-        }}
       />
-      <span
-        style={{
-          flex: 1,
-          color: todo.completed ? '#666' : '#e0e0e0',
-          textDecoration: todo.completed ? 'line-through' : 'none',
-          fontSize: 16,
-        }}
-      >
+      <span className={`todo-text${todo.completed ? ' completed' : ''}`}>
         {todo.text}
       </span>
-      <button
-        onClick={() => onDelete(todo.id)}
-        style={{
-          background: 'transparent',
-          border: 'none',
-          color: '#ef4444',
-          cursor: 'pointer',
-          fontSize: 18,
-          padding: '4px 8px',
-          borderRadius: 4,
-        }}
-      >
-        x
-      </button>
-    </div>
-  )
+      <span className={`priority-badge priority-${priority}`}>
+        {capitalizeFirst(priority)}
+      </span>
+      {formattedDueDate && (
+        <span className={`due-date${overdueClass}`}>
+          {formattedDueDate}
+        </span>
+      )}
+      <span className="todo-date">{formattedCreatedAt}</span>
+      <button className="delete-btn" onClick={() => onDelete(todo.id)}>Delete</button>
+    </li>
+  );
 }

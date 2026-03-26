@@ -174,7 +174,7 @@ export function mutate(dotPath: string, value: unknown): void {
   setNestedValue(state as unknown as Record<string, unknown>, dotPath, value)
   persistMutation(dotPath, value, state)
   // Keep overview.json in sync for agent/plan/task changes
-  if (dotPath.startsWith('agents.') || dotPath.startsWith('activePlans') || dotPath.startsWith('tasks.')) {
+  if (dotPath.startsWith('agents.') || dotPath.startsWith('activePlans') || dotPath.startsWith('tasks.') || dotPath.startsWith('fileChanges.')) {
     rebuildOverview(state)
   }
 }
@@ -202,7 +202,7 @@ export function mutateBatch(mutations: Array<{ path: string; value: unknown }>):
   }
 
   // Keep overview.json in sync
-  if (mutations.some(m => m.path.startsWith('agents.') || m.path.startsWith('activePlans') || m.path.startsWith('tasks.'))) {
+  if (mutations.some(m => m.path.startsWith('agents.') || m.path.startsWith('activePlans') || m.path.startsWith('tasks.') || m.path.startsWith('fileChanges.'))) {
     rebuildOverview(state)
   }
 }

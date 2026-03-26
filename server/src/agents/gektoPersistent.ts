@@ -1,6 +1,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
 import { randomUUID } from 'crypto'
 import { CLAUDE_PATH } from '../claudePath.js'
+import { BASH_SAFETY_RULES } from './bashSafetyRules.js'
 
 // Gekto persistent process - warm Claude process for structured planning and chat
 // Plan mode is the default, direct mode is enabled via UI toggle
@@ -81,7 +82,8 @@ Abstract plan rules for create_plan / update_plan:
 - Include a "buildPrompt" explaining how to wire everything together after individual tasks complete.
 - Work items should be parallelizable — no item should depend on another item's output.
 
-You can ONLY use Read, Glob, and Grep tools. Bash and Task are disabled.
+You can use Read, Glob, Grep, and Bash tools. Task is disabled.
+${BASH_SAFETY_RULES}
 
 Your response MUST be valid JSON matching this schema. Output ONLY the JSON object, nothing else.
 ${GEKTO_OUTPUT_SCHEMA}`
@@ -174,7 +176,7 @@ function spawnOpus(): void {
     '--model', 'claude-opus-4-5-20251101',
     '--system-prompt', GEKTO_SYSTEM_PROMPT,
     '--dangerously-skip-permissions',
-    '--disallowed-tools', 'Bash', 'Task',
+    '--disallowed-tools', 'Task',
     '--session-id', gektoSessionId,
   ]
 

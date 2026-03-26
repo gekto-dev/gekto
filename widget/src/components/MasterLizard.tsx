@@ -51,9 +51,18 @@ export function MasterLizard() {
       id: 'chat',
       icon: <ChatBubbleIcon width={20} height={20} />,
       label: isChatOpen ? 'Close Chat' : 'Chat',
-      hotkey: undefined,
+      hotkey: '⇧↵',
       active: isChatOpen,
-      onClick: () => isChatOpen ? closeChat() : openChat(MASTER_ID, 'task'),
+      onClick: () => {
+        if (isChatOpen) {
+          closeChat()
+        } else {
+          openChat(MASTER_ID, 'task')
+          if (currentPlan && !isPlanPanelOpen) {
+            openPlanPanel()
+          }
+        }
+      },
     },
     {
       id: 'spawn',
@@ -118,6 +127,20 @@ export function MasterLizard() {
         return
       }
 
+      // Shift+Enter to toggle Gekto chat (+ open plan panel if plan exists)
+      if (e.shiftKey && e.key === 'Enter') {
+        e.preventDefault()
+        if (isChatOpen) {
+          closeChat()
+        } else {
+          openChat(MASTER_ID, 'task')
+          if (currentPlan && !isPlanPanelOpen) {
+            openPlanPanel()
+          }
+        }
+        return
+      }
+
       // ESC to close chat only
       if (e.key === 'Escape') {
         if (activeChatId) {
@@ -128,7 +151,7 @@ export function MasterLizard() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [openChat, activeChatId, closeChat, isWhiteboardOpen, setWhiteboardOpen, addAgent])
+  }, [openChat, activeChatId, closeChat, isWhiteboardOpen, setWhiteboardOpen, addAgent, isChatOpen, currentPlan, isPlanPanelOpen, openPlanPanel])
 
   const { ref, position, isDragging, hasMoved, handlers } = useDraggable({
     initialPosition: {

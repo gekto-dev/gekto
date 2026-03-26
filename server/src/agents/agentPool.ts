@@ -7,6 +7,7 @@ import { WebSocket } from 'ws'
 import type { AgentProvider, StreamCallbacks, AgentResponse, FileChange } from './types.js'
 import { HeadlessAgent } from './HeadlessAgent.js'
 import { getState, mutate, broadcastFileChange, broadcastAgent } from '../state.js'
+import { BASH_SAFETY_RULES } from './bashSafetyRules.js'
 
 interface QueuedMessage {
   message: string
@@ -38,19 +39,14 @@ function summarizeInput(input: Record<string, unknown>): string {
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful coding assistant. Be concise and direct in your responses.
 
-IMPORTANT RESTRICTIONS - You MUST follow these rules:
-1. DO NOT use Bash or shell commands - you cannot run terminal commands
-2. DO NOT try to build, compile, or bundle the project
-3. DO NOT try to start, restart, or run any servers or dev environments
-4. DO NOT run tests, linters, or any CLI tools
-5. DO NOT install packages or run npm/yarn/pnpm commands
+You can use Bash for running tests, installing packages, building, and other shell operations.
+${BASH_SAFETY_RULES}
 
-Your job is ONLY to:
+Your job is to:
 - Read and understand code using Read, Glob, Grep tools
 - Write and edit code using Write and Edit tools
+- Use Bash for running tests, installing packages, git operations, and build commands
 - Make the requested code changes
-
-After making changes, simply report what you did. The user will handle building, testing, and running the code themselves.
 
 STATUS MARKER - At the END of EVERY response, you MUST include exactly one of these markers:
 - [STATUS:DONE] - Use when the task is complete and you have no questions for the user
@@ -62,7 +58,7 @@ Examples:
 - After answering a simple question: "The file is located at src/utils.ts [STATUS:DONE]"`
 
 // Tools that agents are not allowed to use
-const DISALLOWED_TOOLS = ['Bash', 'Task']
+const DISALLOWED_TOOLS = ['Task']
 
 function getOrCreateSession(lizardId: string, ws?: WebSocket): LizardSession {
   let session = sessions.get(lizardId)
