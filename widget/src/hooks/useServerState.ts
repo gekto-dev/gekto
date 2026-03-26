@@ -122,6 +122,7 @@ export interface ExecutionPlan {
 
 export interface GektoAppState {
   activePlans: Record<string, ExecutionPlan>
+  activePlanId: string | null
   tasks: Record<string, Task>
   agents: Record<string, Agent>
   visuals: Record<string, LizardVisual>
@@ -138,6 +139,7 @@ type Listener = () => void
 
 let currentState: GektoAppState = {
   activePlans: {},
+  activePlanId: null,
   tasks: {},
   agents: {},
   visuals: {},
@@ -232,6 +234,10 @@ function initWebSocket(): void {
 
         case 'active_plans_set':
           updateState(s => ({ ...s, activePlans: msg.activePlans ?? {} }))
+          break
+
+        case 'active_plan_id_set':
+          updateState(s => ({ ...s, activePlanId: msg.activePlanId ?? null }))
           break
 
         case 'task_set':

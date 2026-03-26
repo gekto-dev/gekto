@@ -261,6 +261,7 @@ export function loadFromEntityStore(workingDir: string): GektoAppState | null {
 
     const state: GektoAppState = {
       activePlans,
+      activePlanId: null,
       tasks: activeTasks,
       agents: activeAgents,
       visuals: visuals || {},

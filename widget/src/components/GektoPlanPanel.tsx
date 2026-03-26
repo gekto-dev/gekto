@@ -549,14 +549,6 @@ export function GektoPlanPanel({ position, height, onClose }: GektoPlanPanelProp
           {/* Abstract tab */}
           {activeTab === 'abstract' && (
             <>
-              {currentPlan.status === 'planning' && !currentPlan.abstract && (
-                <div className="flex items-center justify-center py-8">
-                  <div className="flex items-center gap-2">
-                    <span style={{ color: '#4ade80', fontSize: '8px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
-                    <span className="shimmer-text font-mono text-xs">Analyzing and writing plan</span>
-                  </div>
-                </div>
-              )}
               {currentPlan.abstract && (
                 <div className="px-1 text-sm plan-abstract">
                   <Markdown

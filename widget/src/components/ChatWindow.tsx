@@ -1375,7 +1375,7 @@ export function ChatWindow({
         )}
 
         {/* Plan generation loader */}
-        {isMaster && currentPlan && (currentPlan.status === 'planning' || currentPlan.status === 'generating_prompts') && agentState !== 'working' && (
+        {/* {isMaster && currentPlan && (currentPlan.status === 'planning' || currentPlan.status === 'generating_prompts') && agentState !== 'working' && (
           <div className="flex justify-start">
             <div className="flex items-center gap-2 py-1">
               <span style={{ color: '#4ade80', fontSize: '8px', animation: 'blink-triangle 1.2s ease-in-out infinite' }}>◆</span>
@@ -1384,7 +1384,7 @@ export function ChatWindow({
               </span>
             </div>
           </div>
-        )}
+        )} */}
 
         <div ref={messagesEndRef} />
       </div>

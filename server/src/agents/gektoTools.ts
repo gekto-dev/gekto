@@ -163,13 +163,15 @@ export async function processWithTools(
     contextParts.push(`Active agents:\n${agentLines.join('\n')}`)
   }
 
-  // Active plans and their tasks
+  // Active plans and their tasks — mark which one is the active plan
   const planEntries = Object.values(serverState.activePlans)
   if (planEntries.length > 0) {
+    const activePlanId = serverState.activePlanId
     const planLines = planEntries.map(plan => {
+      const isActive = plan.id === activePlanId
       const tasks = plan.taskIds.map(id => serverState.tasks[id]).filter(Boolean)
       const taskSummary = tasks.map(t => `    - "${t.name}" (${t.status})${t.files?.length ? ` files=[${t.files.join(', ')}]` : ''}`).join('\n')
-      return `  Plan "${plan.title || plan.id}" (${plan.status}):\n${taskSummary || '    (no tasks yet)'}`
+      return `  ${isActive ? '[ACTIVE] ' : ''}Plan "${plan.title || plan.id}" (${plan.status}):\n${taskSummary || '    (no tasks yet)'}`
     })
     contextParts.push(`Active plans:\n${planLines.join('\n')}`)
   }
@@ -191,12 +193,15 @@ export async function processWithTools(
   }
 
   // Add existing plan context for modifications
-  if (existingPlan?.abstract) {
-    contextPrompt += `\n\n[EXISTING PLAN ABSTRACT - User wants to modify this plan:
+  // Use server-side activePlanId as the authoritative source
+  const activePlan = serverState.activePlanId ? serverState.activePlans[serverState.activePlanId] : null
+  const planAbstract = existingPlan?.abstract || activePlan?.abstract
+  if (planAbstract) {
+    contextPrompt += `\n\n[ACTIVE PLAN ABSTRACT — "${activePlan?.title || 'Untitled'}" (${activePlan?.status || 'unknown'}):
 
-${existingPlan.abstract}
+${planAbstract}
 
-The user's message above is a modification request. Respond with "update_plan" and the FULL updated abstract (not just the changes). Keep the same structure and style.]`
+If the user wants to change this plan, respond with "update_plan" and the FULL updated abstract (not just the changes). Keep the same structure and style.]`
   }
 
   // Append image file paths to prompt so Gekto can reference them
@@ -225,16 +230,22 @@ The user's message above is a modification request. Respond with "update_plan" a
   switch (parsed.action) {
     case 'create_plan':
     case 'update_plan': {
+      // For update_plan, always target the server's active plan
+      const effectivePlanId = parsed.action === 'update_plan' && serverState.activePlanId
+        ? serverState.activePlanId
+        : planId
+      // Preserve createdAt when updating an existing plan
+      const existingCreatedAt = serverState.activePlans[effectivePlanId]?.createdAt
       // Create a draft plan with abstract — tasks are generated later
       const plan: ExecutionPlan = {
-        id: planId,
+        id: effectivePlanId,
         status: 'draft',
         title: parsed.title,
         originalPrompt: prompt,
         abstract: parsed.abstract || parsed.message || '',
         buildPrompt: parsed.buildPrompt,
         taskIds: [],
-        createdAt: new Date().toISOString(),
+        createdAt: existingCreatedAt || new Date().toISOString(),
       }
       return {
         type: 'build',

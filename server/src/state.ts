@@ -85,6 +85,7 @@ export interface LizardVisual {
 
 export interface GektoAppState {
   activePlans: Record<string, ExecutionPlan>
+  activePlanId: string | null // The plan the user is currently viewing/editing
   tasks: Record<string, Task>
   agents: Record<string, Agent>
   visuals: Record<string, LizardVisual>
@@ -110,6 +111,7 @@ function createMasterId(): string {
 function createEmptyState(): GektoAppState {
   return {
     activePlans: {},
+    activePlanId: null,
     tasks: {},
     agents: {},
     visuals: {},
@@ -249,6 +251,11 @@ export function broadcastActivePlans(): void {
   broadcast({ type: 'active_plans_set', activePlans: state.activePlans })
 }
 
+/** Broadcast active plan ID to all clients. */
+export function broadcastActivePlanId(): void {
+  broadcast({ type: 'active_plan_id_set', activePlanId: state.activePlanId })
+}
+
 /** Broadcast a single plan (or deletion) to all clients. */
 export function broadcastSinglePlan(planId: string): void {
   broadcast({ type: 'plan_set', planId, plan: state.activePlans[planId] ?? null })
@@ -309,6 +316,9 @@ export function broadcastForPath(dotPath: string): void {
   const root = parts[0]
 
   switch (root) {
+    case 'activePlanId':
+      broadcastActivePlanId()
+      break
     case 'activePlans':
       if (parts[1]) {
         broadcastSinglePlan(parts[1])

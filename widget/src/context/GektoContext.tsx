@@ -94,11 +94,12 @@ export function GektoProvider({ children }: GektoProviderProps) {
   // Server state — plans come from here
   const { state: serverState, send } = useServerState()
   const activePlans = serverState.activePlans
-  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+  // activePlanId is server-authoritative — the plan the user is viewing/editing
+  const selectedPlanId = serverState.activePlanId
   // When true, user clicked "+" to start a new plan — don't auto-select existing plans
   const [isCreatingNewPlan, setIsCreatingNewPlan] = useState(false)
 
-  // Derive current plan from selection
+  // Derive current plan from server-authoritative activePlanId
   const currentPlan = useMemo(() => {
     if (selectedPlanId && activePlans[selectedPlanId]) {
       return activePlans[selectedPlanId]
@@ -106,7 +107,7 @@ export function GektoProvider({ children }: GektoProviderProps) {
     return null
   }, [selectedPlanId, activePlans])
 
-  // Auto-select: if selectedPlanId is stale (plan was deleted), pick the most recent active plan
+  // Auto-select: if activePlanId is stale (plan was deleted), pick the most recent plan
   // But don't auto-select if user is creating a new plan
   useEffect(() => {
     if (isCreatingNewPlan) return // user deliberately cleared selection
@@ -118,21 +119,21 @@ export function GektoProvider({ children }: GektoProviderProps) {
         const pb = activePlans[b]
         return (pb.createdAt || '').localeCompare(pa.createdAt || '')
       })
-      setSelectedPlanId(sorted[0])
-    } else {
-      setSelectedPlanId(null)
+      send({ type: 'set_active_plan', planId: sorted[0] })
+    } else if (selectedPlanId !== null) {
+      send({ type: 'set_active_plan', planId: null })
     }
-  }, [selectedPlanId, activePlans, isCreatingNewPlan])
+  }, [selectedPlanId, activePlans, isCreatingNewPlan, send])
 
   const selectPlan = useCallback((planId: string) => {
-    setSelectedPlanId(planId)
+    send({ type: 'set_active_plan', planId })
     setIsCreatingNewPlan(false)
-  }, [])
+  }, [send])
 
   const createNewPlan = useCallback(() => {
-    setSelectedPlanId(null)
+    send({ type: 'set_active_plan', planId: null })
     setIsCreatingNewPlan(true)
-  }, [])
+  }, [send])
 
   // Resolve tasks from currentPlan.taskIds + state.tasks
   const planTasks = useMemo((): Task[] => {
@@ -157,9 +158,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
       return
     }
 
-    // If there's a selected plan that isn't finished, we're modifying it
-    const isModifyingPlan = currentPlan && currentPlan.status !== 'completed' && currentPlan.status !== 'failed' && currentPlan.status !== 'planning'
-    const planId = isModifyingPlan ? currentPlan.id : `plan_test_${Date.now()}`
+    // If there's an active plan and user didn't click "+", reuse the active plan's ID
+    // so the message applies to the current plan. Only generate a new ID for new plans.
+    const planId = (!isCreatingNewPlan && selectedPlanId) ? selectedPlanId : `plan_test_${Date.now()}`
 
     // Include current agents so server knows what exists
     const currentAgents = Object.values(storeAgents).map(a => ({
@@ -173,15 +174,12 @@ export function GektoProvider({ children }: GektoProviderProps) {
       planId,
       mode: directMode ? 'direct' : 'plan',
       lizards: currentAgents,
-      existingPlan: isModifyingPlan ? {
-        abstract: currentPlan.abstract,
-      } : undefined,
     }
     if (images && images.length > 0) {
       payload.images = images
     }
     ws.send(JSON.stringify(payload))
-  }, [getWebSocket, storeAgents, directMode, currentPlan])
+  }, [getWebSocket, storeAgents, directMode, isCreatingNewPlan, selectedPlanId])
 
   // Generate tasks from plan abstract (converts abstract → structured tasks with prompts)
   const generateTasks = useCallback(() => {
@@ -367,9 +365,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
     // Auto-select another plan if any remain
     const remaining = Object.keys(activePlans).filter(id => id !== currentPlan.id)
     if (remaining.length > 0) {
-      setSelectedPlanId(remaining[0])
+      send({ type: 'set_active_plan', planId: remaining[0] })
     } else {
-      setSelectedPlanId(null)
+      send({ type: 'set_active_plan', planId: null })
       setIsPlanPanelOpen(false)
     }
   }, [currentPlan, activePlans, getWebSocket, send])
@@ -627,26 +625,9 @@ export function GektoProvider({ children }: GektoProviderProps) {
   }) => {
     switch (msg.type) {
       case 'planning_started': {
-        // Set temporary planning state — panel will open when plan_created arrives
+        // Server already set the plan status to 'planning' (or created a temporary entry).
+        // Just select the plan and open the panel.
         const planId = msg.planId!
-        const existingPlan = activePlans[planId]
-        if (!existingPlan || existingPlan.status === 'completed' || existingPlan.status === 'failed') {
-          send({
-            type: 'save_state',
-            path: `activePlans.${planId}`,
-            value: {
-              id: planId,
-              status: 'planning',
-              originalPrompt: msg.prompt ?? '',
-              taskIds: [],
-              createdAt: new Date().toISOString(),
-            },
-          })
-        } else if (existingPlan.status === 'draft') {
-          send({ type: 'save_state', path: `activePlans.${planId}.status`, value: 'planning' })
-        }
-        // Auto-select this plan
-        setSelectedPlanId(planId)
         setIsCreatingNewPlan(false)
         break
       }
@@ -791,10 +772,8 @@ export function GektoProvider({ children }: GektoProviderProps) {
 
       case 'plan_created':
         // Plan data arrives via plan_set action in useServerState — just open the panel
-        if (msg.planId) {
-          setSelectedPlanId(msg.planId)
-          setIsCreatingNewPlan(false)
-        }
+        // activePlanId already set by server when plan was created
+        setIsCreatingNewPlan(false)
         setIsPlanPanelOpen(true)
         break
 

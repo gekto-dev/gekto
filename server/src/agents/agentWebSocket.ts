@@ -7,7 +7,7 @@ import { processWithTools, generateTasksFromAbstract, type PlanCallbacks, type T
 import type { ExecutionPlan, Task } from './types.js'
 import { randomUUID } from 'crypto'
 import { initGekto, getGektoState, abortGekto, setStateCallback, resetGektoSession, restoreGektoSession, getGektoSessionId } from './gektoPersistent.js'
-import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, getClients, broadcastActivePlans, broadcastSinglePlan, broadcastTask, broadcastAgent, broadcastVisuals, broadcastVisualDelete, broadcastForPath, type Agent, type Message } from '../state.js'
+import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, getClients, broadcastActivePlans, broadcastActivePlanId, broadcastSinglePlan, broadcastTask, broadcastAgent, broadcastVisuals, broadcastVisualDelete, broadcastForPath, type Agent, type Message } from '../state.js'
 import { persistEntity } from '../entityStore.js'
 import fs from 'fs'
 import nodePath from 'path'
@@ -206,7 +206,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             // Clear tasks and plans
             mutate('tasks', {})
             mutate('activePlans', {})
+            mutate('activePlanId', null)
             broadcastActivePlans()
+            broadcastActivePlanId()
+            return
+          }
+
+          case 'set_active_plan': {
+            mutate('activePlanId', msg.planId ?? null)
+            broadcastActivePlanId()
             return
           }
 
@@ -226,6 +234,32 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             if (planImages && planImages.length > 0) {
               planImagePaths = saveImagesToTempFiles(planImages)
             }
+
+            // Remember the plan's state before processing so we can restore it
+            // if Gekto replies with chat/delegate/error instead of a plan update.
+            // Only delete plans that were created as temporary 'planning' entries.
+            const planBeforeProcessing = getState().activePlans[msg.planId] ?? null
+            const planExistedBefore = planBeforeProcessing !== null
+            const previousStatus = planBeforeProcessing?.status
+
+            // Set plan status to 'planning' on the server side (authoritative)
+            // so we don't race with the client's save_state message
+            if (planBeforeProcessing) {
+              mutate(`activePlans.${msg.planId}.status`, 'planning')
+            } else {
+              // Create temporary plan entry for new plans
+              mutate(`activePlans.${msg.planId}`, {
+                id: msg.planId,
+                status: 'planning',
+                originalPrompt: msg.prompt ?? '',
+                taskIds: [],
+                createdAt: new Date().toISOString(),
+              })
+            }
+            broadcastSinglePlan(msg.planId)
+            // Set as active plan
+            mutate('activePlanId', msg.planId)
+            broadcastActivePlanId()
 
             try {
               // Server-side accumulators and block counter
@@ -342,6 +376,10 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   }
                 }
 
+                // Set the newly created/updated plan as active
+                mutate('activePlanId', planResult.plan.id)
+                broadcastActivePlanId()
+
                 ws.send(JSON.stringify({
                   type: 'plan_created',
                   planId: msg.planId,
@@ -368,21 +406,26 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   agents: planResult.removedAgents,
                 }))
               } else if (planResult.type === 'delegate' && planResult.delegateAgentId) {
-                // Clear stale planning state — delegate doesn't create a plan
-                const currentState = getState()
-                if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
-                  mutate(`activePlans.${msg.planId}`, undefined)
-                  broadcastSinglePlan(msg.planId)
+                // Restore plan state — only delete if it was a temporary entry
+                if (msg.planId && getState().activePlans[msg.planId]?.status === 'planning') {
+                  if (planExistedBefore && previousStatus) {
+                    mutate(`activePlans.${msg.planId}.status`, previousStatus)
+                    broadcastSinglePlan(msg.planId)
+                  } else {
+                    mutate(`activePlans.${msg.planId}`, undefined)
+                    broadcastSinglePlan(msg.planId)
+                  }
                 }
                 // Send instruction to existing agent
                 const targetAgentId = planResult.delegateAgentId
-                const targetAgent = currentState.agents[targetAgentId]
+                const delegateState = getState()
+                const targetAgent = delegateState.agents[targetAgentId]
                 if (targetAgent) {
                   // Update agent status to working
                   mutate(`agents.${targetAgentId}.status`, 'working')
                   broadcastAgent(targetAgentId)
                   // Notify client about delegation
-                  const delegateTask = targetAgent.taskId ? currentState.tasks[targetAgent.taskId] : null
+                  const delegateTask = targetAgent.taskId ? delegateState.tasks[targetAgent.taskId] : null
                   ws.send(JSON.stringify({
                     type: 'gekto_delegate',
                     planId: msg.planId,
@@ -402,11 +445,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   }))
                 }
               } else if (planResult.type === 'chat') {
-                // Chat reply — clear the temporary 'planning' plan state
-                const currentState = getState()
-                if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
-                  mutate(`activePlans.${msg.planId}`, undefined)
-                  broadcastSinglePlan(msg.planId)
+                // Restore plan state — only delete if it was a temporary entry
+                if (msg.planId && getState().activePlans[msg.planId]?.status === 'planning') {
+                  if (planExistedBefore && previousStatus) {
+                    mutate(`activePlans.${msg.planId}.status`, previousStatus)
+                    broadcastSinglePlan(msg.planId)
+                  } else {
+                    mutate(`activePlans.${msg.planId}`, undefined)
+                    broadcastSinglePlan(msg.planId)
+                  }
                 }
               }
               // Persist Gekto session ID on current master so it survives restart
@@ -429,11 +476,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 planId: msg.planId,
                 message: `Error: ${err instanceof Error ? err.message : 'Processing failed'}`,
               }))
-              // Clear stale planning state on error
-              const currentState = getState()
-              if (msg.planId && currentState.activePlans[msg.planId]?.status === 'planning') {
-                mutate(`activePlans.${msg.planId}`, undefined)
-                broadcastSinglePlan(msg.planId)
+              // Restore plan state on error — only delete if it was a temporary entry
+              if (msg.planId && getState().activePlans[msg.planId]?.status === 'planning') {
+                if (planExistedBefore && previousStatus) {
+                  mutate(`activePlans.${msg.planId}.status`, previousStatus)
+                  broadcastSinglePlan(msg.planId)
+                } else {
+                  mutate(`activePlans.${msg.planId}`, undefined)
+                  broadcastSinglePlan(msg.planId)
+                }
               }
 
               ws.send(JSON.stringify({ type: 'gekto_done', planId: msg.planId }))
