@@ -159,10 +159,20 @@ export function SwarmProvider({
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [chatMode, setChatMode] = useState<ChatMode>('task')
   const lizardInstancesRef = useRef<Map<string, LizardInstance>>(new Map())
-  const [isWhiteboardOpen, setWhiteboardOpen] = useState(true)
+  const [isWhiteboardOpen, setWhiteboardOpen] = useState(() => {
+    try {
+      const stored = localStorage.getItem('gekto-whiteboard-open')
+      return stored !== null ? stored === 'true' : true
+    } catch { return true }
+  })
   const [selectionRect, setSelectionRect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null)
   const [isShiftPressed, setIsShiftPressed] = useState(false)
   const initializedFromServerRef = useRef(false)
+
+  // Persist whiteboard open/closed state
+  useEffect(() => {
+    try { localStorage.setItem('gekto-whiteboard-open', String(isWhiteboardOpen)) } catch {}
+  }, [isWhiteboardOpen])
 
   // Ref for visuals
   const visualsRef = useRef(visuals)
