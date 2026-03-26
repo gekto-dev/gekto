@@ -456,29 +456,22 @@ export class TaskShapeUtil extends ShapeUtil<any> {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
                   <div
                     onPointerDown={handleDiffClick}
+                    onPointerEnter={(e) => { e.currentTarget.style.textDecoration = 'underline' }}
+                    onPointerLeave={(e) => { e.currentTarget.style.textDecoration = 'none' }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 4,
-                      padding: '3px 8px',
+                      gap: 3,
+                      padding: '3px 6px',
                       borderRadius: 4,
-                      background: '#3b82f620',
-                      color: '#3b82f6',
+                      background: 'transparent',
+                      color: 'rgba(255,255,255,0.9)',
                       cursor: 'pointer',
                       fontWeight: 500,
                       fontSize: 10,
                     }}
                   >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 3v18" />
                       <path d="M3 12h18" />
                     </svg>
@@ -487,14 +480,16 @@ export class TaskShapeUtil extends ShapeUtil<any> {
                   {/* Accept button */}
                   <div
                     onPointerDown={handleAcceptClick}
+                    onPointerEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.18)' }}
+                    onPointerLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.10)' }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: 3,
                       padding: '3px 8px',
                       borderRadius: 4,
-                      background: '#22c55e20',
-                      color: '#22c55e',
+                      background: 'rgba(255,255,255,0.10)',
+                      color: 'rgba(255,255,255,0.9)',
                       cursor: 'pointer',
                       fontWeight: 500,
                       fontSize: 10,
