@@ -626,8 +626,6 @@ export function GektoProvider({ children }: GektoProviderProps) {
     switch (msg.type) {
       case 'planning_started': {
         // Server already set the plan status to 'planning' (or created a temporary entry).
-        // Just select the plan and open the panel.
-        const planId = msg.planId!
         setIsCreatingNewPlan(false)
         break
       }
