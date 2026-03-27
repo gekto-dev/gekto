@@ -384,13 +384,6 @@ async function sendToOpus(prompt: string, callbacks: GektoCallbacks, retries = 3
       return
     }
 
-    // Timeout after 5 min for complex tasks
-    setTimeout(() => {
-      if (opusPendingResolve) {
-        opusPendingResolve('Task timed out. Please try breaking it into smaller steps.')
-        opusPendingResolve = null
-      }
-    }, 300000)
   })
 }
 
