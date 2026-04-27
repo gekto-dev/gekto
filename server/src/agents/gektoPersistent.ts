@@ -174,7 +174,7 @@ function spawnOpus(): void {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
-    '--model', 'claude-opus-4-5-20251101',
+    '--model', 'claude-opus-4-6',
     '--system-prompt', GEKTO_SYSTEM_PROMPT,
     '--dangerously-skip-permissions',
     '--disallowed-tools', 'Task',

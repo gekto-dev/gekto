@@ -28,6 +28,8 @@ Rules:
 - Each task must be self-contained — it should not import from files created by other tasks
 - Only add a dependency when a task DIRECTLY needs files produced by another task. Do not create unnecessary sequential chains.
 
+IMPORTANT: Do NOT use any tools. Do NOT read files or explore the repository. The plan abstract already contains all the context you need — it was produced by a previous research step. Just generate the JSON output directly from the information provided.
+
 Output ONLY a valid JSON array of outline objects, nothing else. No markdown wrapping.`
 
 // Phase 2: Generate detailed prompt for a single task
@@ -41,6 +43,8 @@ Output a JSON object with:
   - Edge cases to handle
   - What "done" looks like
   - MUST include: "Do NOT import from files created by other tasks"
+
+IMPORTANT: Do NOT use any tools. Do NOT read files or explore the repository. The plan abstract and task outlines already contain all the context you need — they were produced by a previous research step. Just generate the JSON output directly from the information provided.
 
 Output ONLY a valid JSON object, nothing else. No markdown wrapping.`
 
@@ -564,7 +568,8 @@ function runClaudeOnce(
       '--model', 'claude-sonnet-4-6',
       '--system-prompt', systemPrompt,
       '--dangerously-skip-permissions',
-      '--disallowed-tools', 'Task', 'Edit', 'Write', 'Bash',
+      '--disallowed-tools', 'Task', 'Edit', 'Write', 'Bash', 'Read', 'Glob', 'Grep', 'Agent',
+      '--max-turns', '1',
     ]
 
     // Note: do NOT use --resume with the shared session ID.

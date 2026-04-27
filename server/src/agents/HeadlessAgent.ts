@@ -62,7 +62,7 @@ export class HeadlessAgent implements AgentProvider {
       '-p', finalMessage,
       '--output-format', 'stream-json',
       '--verbose',
-      '--model', 'claude-opus-4-5-20251101',
+      '--model', 'claude-opus-4-6',
       '--dangerously-skip-permissions',
     ]
 

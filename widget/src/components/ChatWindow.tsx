@@ -1188,7 +1188,7 @@ export function ChatWindow({
                     background: 'rgba(34, 197, 94, 0.08)',
                     border: '1px solid rgba(34, 197, 94, 0.15)',
                   }}
-                >
+                > 
                   <span style={{ color: '#4ade80', fontSize: '8px' }}>◆</span>
                   <span style={{ color: 'rgba(255, 255, 255, 0.4)' }}>Delegated to</span>
                   <span
