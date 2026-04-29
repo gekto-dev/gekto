@@ -5,3 +5,4 @@ dist/
 .gekto/
 test-app/
 gekto-store.json
+.env

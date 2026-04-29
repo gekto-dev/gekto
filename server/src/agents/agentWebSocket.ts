@@ -11,6 +11,7 @@ import { getState, mutate, mutateBatch, addClient, removeClient, sendSnapshot, g
 import { persistEntity } from '../entityStore.js'
 import fs from 'fs'
 import nodePath from 'path'
+import { getPostHog, getDistinctId } from '../posthog.js'
 
 let gektoInitialized = false
 
@@ -175,6 +176,11 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               type: 'kill_all_result',
               killed: killedCount,
             }))
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'all agents killed',
+              properties: { killed_count: killedCount },
+            })
             // Notify about state changes
             for (const session of getActiveSessions()) {
               ws.send(JSON.stringify({ type: 'state', lizardId: session.lizardId, state: 'ready' }))
@@ -209,6 +215,11 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             mutate('activePlanId', null)
             broadcastActivePlans()
             broadcastActivePlanId()
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'all agents cleared',
+              properties: { agent_count: agentIds.length },
+            })
             return
           }
 
@@ -323,6 +334,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 prompt: msg.prompt,
               }))
 
+              getPostHog().capture({
+                distinctId: getDistinctId(),
+                event: 'gekto message sent',
+                properties: {
+                  plan_id: msg.planId,
+                  has_images: Boolean(planImagePaths?.length),
+                },
+              })
+
               const planResult = await processWithTools(
                 msg.prompt,
                 msg.planId,
@@ -385,6 +405,16 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                   planId: msg.planId,
                   plan: planResult.plan,
                 }))
+
+                getPostHog().capture({
+                  distinctId: getDistinctId(),
+                  event: 'plan created',
+                  properties: {
+                    plan_id: planResult.plan.id,
+                    plan_title: planResult.plan.title,
+                    action: planExistedBefore ? 'update_plan' : 'create_plan',
+                  },
+                })
               } else if (planResult.type === 'remove' && planResult.removedAgents) {
                 // Remove agents from server state
                 const currentState = getState()
@@ -471,6 +501,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               }
             } catch (err) {
               console.error('[Agent] Gekto processing failed:', err)
+              getPostHog().captureException(err, getDistinctId(), { plan_id: msg.planId })
               ws.send(JSON.stringify({
                 type: 'gekto_chat',
                 planId: msg.planId,
@@ -565,6 +596,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                     planId: msg.planId,
                     taskCount: tasks.length,
                   }))
+
+                  getPostHog().capture({
+                    distinctId: getDistinctId(),
+                    event: 'plan tasks generated',
+                    properties: {
+                      plan_id: msg.planId,
+                      task_count: tasks.length,
+                    },
+                  })
                 },
                 onError: (error) => {
                   ws.send(JSON.stringify({
@@ -581,6 +621,7 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               await generateTasksFromAbstract(genPlan, getWorkingDir(), genCallbacks)
             } catch (err) {
               console.error('[Agent] Task generation failed:', err)
+              getPostHog().captureException(err, getDistinctId(), { plan_id: msg.planId })
               ws.send(JSON.stringify({
                 type: 'gekto_chat',
                 planId: msg.planId,
@@ -605,10 +646,23 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               mutate(`activePlans.${msg.planId}.status`, 'executing')
               broadcastSinglePlan(msg.planId)
             }
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'plan executed',
+              properties: {
+                plan_id: msg.planId,
+                task_count: currentState.activePlans[msg.planId]?.taskIds?.length ?? 0,
+              },
+            })
             return
           }
 
           case 'cancel_plan': {
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'plan canceled',
+              properties: { plan_id: msg.planId },
+            })
             const currentState = getState()
             const cancelPlan = currentState.activePlans[msg.planId]
             if (cancelPlan) {
@@ -662,6 +716,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             ])
             broadcastTask(task.id)
             broadcastAgent(agent.id)
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'worker agent spawned',
+              properties: {
+                agent_id: agent.id,
+                task_id: task.id,
+                plan_id: task.planId,
+              },
+            })
             return
           }
 
@@ -736,6 +799,16 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               mutateBatch(mutations)
               broadcastTask(msg.taskId)
               if (agentId) broadcastAgent(agentId)
+              getPostHog().capture({
+                distinctId: getDistinctId(),
+                event: 'task completed',
+                properties: {
+                  task_id: msg.taskId,
+                  task_name: taskState?.name,
+                  plan_id: taskState?.planId,
+                  agent_id: agentId,
+                },
+              })
             }
             return
           }
@@ -754,17 +827,39 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               mutateBatch(mutations)
               broadcastTask(msg.taskId)
               if (agentId) broadcastAgent(agentId)
+              getPostHog().capture({
+                distinctId: getDistinctId(),
+                event: 'task failed',
+                properties: {
+                  task_id: msg.taskId,
+                  task_name: taskState?.name,
+                  plan_id: taskState?.planId,
+                  agent_id: agentId,
+                  error: msg.error,
+                },
+              })
             }
             return
           }
 
           case 'task_started': {
             if (msg.taskId) {
+              const taskState = getState().tasks[msg.taskId]
               mutateBatch([
                 { path: `tasks.${msg.taskId}.status`, value: 'in_progress' },
                 { path: `tasks.${msg.taskId}.assignedAgentId`, value: msg.lizardId },
               ])
               broadcastTask(msg.taskId)
+              getPostHog().capture({
+                distinctId: getDistinctId(),
+                event: 'task started',
+                properties: {
+                  task_id: msg.taskId,
+                  task_name: taskState?.name,
+                  plan_id: taskState?.planId,
+                  agent_id: msg.lizardId,
+                },
+              })
             }
             return
           }
@@ -987,6 +1082,14 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
                 broadcastAgent(lizardId)
               }
               const images = (msg.images as string[] | undefined)
+              getPostHog().capture({
+                distinctId: getDistinctId(),
+                event: 'agent message sent',
+                properties: {
+                  agent_id: lizardId,
+                  has_images: Boolean(images?.length),
+                },
+              })
               await sendMessage(lizardId, msg.content, ws, images)
             } catch (err) {
               console.error(`[Agent] [${lizardId}] Error:`, err)
@@ -999,6 +1102,11 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
             } else {
               resetSession(lizardId)
             }
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'agent reset',
+              properties: { agent_id: lizardId },
+            })
             ws.send(JSON.stringify({ type: 'state', lizardId, state: 'ready' }))
             break
 
@@ -1010,6 +1118,15 @@ export function setupAgentWebSocket(server: Server, path: string = '/__gekto/age
               reverted: revertResult.reverted,
               failed: revertResult.failed,
             }))
+            getPostHog().capture({
+              distinctId: getDistinctId(),
+              event: 'files reverted',
+              properties: {
+                agent_id: lizardId,
+                reverted_count: revertResult.reverted.length,
+                failed_count: revertResult.failed.length,
+              },
+            })
             // Remove reverted file changes from agent state
             const agentState = getState().agents[lizardId]
             if (agentState?.fileChanges) {

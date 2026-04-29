@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
 import * as pty from 'node-pty'
 import * as os from 'node:os'
+import { getPostHog, getDistinctId } from './posthog.js'
 
 interface TerminalSession {
   pty: pty.IPty | null
@@ -30,6 +31,11 @@ export function setupTerminalWebSocket(server: Server, path: string = '/__gekto/
   })
 
   wss.on('connection', (ws: WebSocket) => {
+    getPostHog().capture({
+      distinctId: getDistinctId(),
+      event: 'terminal session started',
+    })
+
     // Create session but don't spawn PTY yet - wait for resize
     const session: TerminalSession = {
       pty: null,

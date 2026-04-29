@@ -1,6 +1,6 @@
 {
   "name": "gekto",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "AI coding assistant widget - inject into any web app",
   "type": "module",
   "bin": {
@@ -27,6 +27,7 @@
   "dependencies": {
     "@clack/prompts": "^1.0.0",
     "node-pty": "^1.1.0-beta30",
+    "posthog-node": "^5.21.2",
     "ws": "^8.18.3"
   },
   "devDependencies": {

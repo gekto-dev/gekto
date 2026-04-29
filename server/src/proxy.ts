@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as p from '@clack/prompts'
+import { getPostHog, getDistinctId, initDistinctId } from './posthog.js'
 
 // Colors for TUI
 const c = {
@@ -121,6 +122,7 @@ async function runOnboarding() {
     PROJECT_TYPE = existingSettings.projectType
     TARGET_PORT = existingSettings.targetPort
     PROXY_PORT = existingSettings.proxyPort
+    initDistinctId(existingSettings.email)
     console.log(`${c.dim}Loaded settings from gekto-store.json${c.reset}`)
     return
   }
@@ -198,6 +200,18 @@ async function runOnboarding() {
     email,
   })
 
+  initDistinctId(email)
+  getPostHog().capture({
+    distinctId: getDistinctId(),
+    event: 'onboarding completed',
+    properties: {
+      project_type: PROJECT_TYPE,
+      has_email: Boolean(email),
+      $set: email ? { email } : undefined,
+      $set_once: { initial_project_type: PROJECT_TYPE },
+    },
+  })
+
   spinner.stop('Ready!')
 
   p.outro(`${c.green}Starting Gekto...${c.reset}`)
@@ -222,9 +236,11 @@ async function main() {
   // Prevent EPIPE and other uncaught errors from crashing the server
   process.on('uncaughtException', (err) => {
     console.error('[proxy] Uncaught exception (server stays running):', err.message)
+    getPostHog().captureException(err, getDistinctId())
   })
   process.on('unhandledRejection', (err) => {
     console.error('[proxy] Unhandled rejection (server stays running):', err)
+    if (err instanceof Error) getPostHog().captureException(err, getDistinctId())
   })
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -557,7 +573,26 @@ async function main() {
   console.clear()
   printLogo()
 
+  // Graceful shutdown — flush PostHog before exit
+  const shutdown = async () => {
+    await getPostHog().shutdown()
+    process.exit(0)
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+
   server.listen(PROXY_PORT, () => {
+    getPostHog().capture({
+      distinctId: getDistinctId(),
+      event: 'proxy started',
+      properties: {
+        project_type: PROJECT_TYPE,
+        proxy_port: PROXY_PORT,
+        target_port: TARGET_PORT,
+        dev_mode: DEV_MODE,
+      },
+    })
+
     if (PROJECT_TYPE === 'frontend') {
       printBox([
         `${c.bold}Gekto is ready!${c.reset}`,
