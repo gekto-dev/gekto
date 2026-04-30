@@ -3,6 +3,5 @@ dist/
 *.log
 .DS_Store
 .gekto/
-test-app/
 gekto-store.json
 .env
