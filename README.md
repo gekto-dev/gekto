@@ -1,82 +1,82 @@
 # Gekto
 
-A development widget that injects into any web app via proxy, providing a draggable terminal and other dev tools.
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/RDcWJJKE)
 
-## Requirements
+Visual orchestrator for coding agents. Run many agents in parallel on an infinite canvas, plan work visually, and ship faster.
 
-- **Node.js 18+** (recommended: 20 or 22)
-- npm or yarn
+---
 
-### Why Node.js 18+?
+## What is Gekto
 
-Gekto's terminal uses `node-pty`, a native module that spawns real pseudo-terminals. This requires:
-- A compatible Node.js version (18, 20, or 22)
-- Build tools for native compilation (usually pre-installed on dev machines)
-
-If you encounter build errors during installation:
-- **macOS**: Install Xcode Command Line Tools: `xcode-select --install`
-- **Linux**: Install build-essential: `apt install build-essential`
-- **Windows**: Install Visual Studio Build Tools
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/your-username/gekto.git
-cd gekto
-
-# Install dependencies
-npm install
-
-# Install server dependencies
-cd server && npm install && cd ..
-
-# Install widget dependencies
-cd widget && npm install && cd ..
-```
-
-## Usage
-
-### Development Mode
-
-Start your target app (e.g., on port 5173), then run:
-
-```bash
-# Terminal 1: Start widget dev server
-cd widget && npm run dev
-
-# Terminal 2: Start proxy server
-cd server && npm run dev
-```
-
-Open `http://localhost:3200` - your app will load with the Gekto widget injected.
-
-### Production Mode
-
-```bash
-# Build the widget
-cd widget && npm run build
-
-# Run the proxy pointing to your app
-cd server && npm run preview -- --target 3000
-```
-
-## Architecture
-
-```
-┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
-│   Your App          │     │   Gekto Proxy       │     │   Browser           │
-│   (port 5173)       │ ←── │   (port 3200)       │ ←── │                     │
-│                     │     │   + Widget injection │     │   + Gekto Widget    │
-└─────────────────────┘     │   + Terminal WS      │     │   + Terminal UI     │
-                            └─────────────────────┘     └─────────────────────┘
-```
+Gekto is a local-first canvas UI that sits on top of coding agents like Claude Code. Instead of driving one agent at a time from a terminal, you orchestrate a swarm — drafting plans, splitting work across agents, watching diffs land, and shipping in bulk. Run `npx gekto` in any project and a browser canvas opens with your repo wired in.
 
 ## Features
 
-- Draggable lizard mascots
-- In-browser terminal with full PTY support (Ctrl+C, arrow keys, colors)
-- Injects into any web app via proxy
+- **Infinite canvas** — every agent, plan, and task lives on a single tldraw-powered canvas you can pan and zoom forever.
+- **Parallel execution** — spin up 10+ agents at once. Conflicts are resolved automatically as work merges back.
+- **Plan-driven development** — draft a plan, iterate on it, then dispatch it. Plans become the source of truth for every agent.
+- **Planner agent** — a dedicated agent that turns a goal into a structured, reviewable plan you can edit before running.
+- **Seamless delegation** — Gekto picks the right agent for each task and feeds it the plan's context automatically.
+- **Diff & revert** — every edit is captured. Review diffs inline, revert any change at any time, never lose work.
+- **In-browser terminal** — full PTY shell (Ctrl+C, arrow keys, colors) injected into your app via proxy.
+- **Local & private** — chats, plans, and history are persisted on your machine. Nothing ships to a backend.
+
+## Supported Agents
+
+| Agent | Status |
+| --- | --- |
+| Claude Code | Available |
+| OpenAI Codex | Coming soon |
+| Gemini CLI | Coming soon |
+| Cursor Agent | Coming soon |
+
+## Getting Started
+
+### Requirements
+
+- **Node.js 18+** (recommended: 20 or 22) — `node-pty` requires native build tools
+- **[Bun](https://bun.sh)** — used for the dev workflow
+- macOS: `xcode-select --install` · Linux: `apt install build-essential` · Windows: Visual Studio Build Tools
+
+### Run locally
+
+```bash
+# Clone
+git clone git@github.com:gekto-dev/gekto.git
+cd gekto
+
+# Install workspace deps (test-app, widget, server)
+bun install
+cd test-app && bun install && cd ..
+cd widget && bun install && cd ..
+cd server && bun install && cd ..
+
+# Start everything: test-app (5173) + widget dev + proxy (3200)
+bun run dev
+```
+
+Open `http://localhost:3200` — the test app loads with the Gekto widget injected.
+
+### Individual processes
+
+```bash
+bun run dev:test-app    # demo app on :5173
+bun run dev:widget      # widget vite dev server
+bun run dev:proxy       # proxy + widget injection on :3200
+```
+
+### Build & preview
+
+```bash
+bun run build    # build widget + server
+bun run preview  # build, then run test-app + proxy against the build
+bun run bundle   # produce a publishable bundle
+```
+
+## Team
+
+- [Alex](https://x.com/justalexagain)
+- [Stan](https://x.com/stankungurov)
 
 ## License
 
